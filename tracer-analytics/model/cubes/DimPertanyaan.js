@@ -1,11 +1,15 @@
-cube(`DimPertanyaan`, {
-  sql_table: `public.dim_pertanyaan`,
+cube(`DimIndikatorEvaluasi`, {
+  sql_table: `public.dim_indikator_evaluasi`,
 
   dimensions: {
-    id_pertanyaan: {
-      sql: `id_pertanyaan`,
+    id_indikator_evaluasi: {
+      sql: `id_indikator_evaluasi`,
       type: `number`,
       primary_key: true,
+    },
+    kode_field: {
+      sql: `kode_field`,
+      type: `string`,
     },
     label_pertanyaan: {
       sql: `label_pertanyaan`,
@@ -14,14 +18,12 @@ cube(`DimPertanyaan`, {
     kategori_pertanyaan: {
       sql: `kategori_pertanyaan`,
       type: `string`,
+      // 'Kompetensi_A', 'Kompetensi_B', 'MetodePembelajaran', 'AlasanKerjaTdkSesuai'
     },
     jenis_skala: {
       sql: `jenis_skala`,
       type: `string`,
-    },
-    kode_field: {
-      sql: `kode_field`,
-      type: `string`,
+      // 'range' atau 'multi_select'
     },
   },
 });

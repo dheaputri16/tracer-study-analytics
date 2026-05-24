@@ -7,17 +7,21 @@ cube(`DimStatusAlumni`, {
       type: `number`,
       primary_key: true,
     },
-    kode_status: {
-      sql: `kode_status`,
-      type: `string`,
-    },
     label: {
       sql: `label`,
       type: `string`,
     },
-    kategori_terserap: {
-      sql: `kategori_terserap`,
-      type: `string`,
+    valid_from: {
+      sql: `valid_from`,
+      type: `time`,
+    },
+    valid_to: {
+      sql: `valid_to`,
+      type: `time`,
+    },
+    flag_status: {
+      sql: `flag_status`,
+      type: `boolean`,
     },
   },
 });

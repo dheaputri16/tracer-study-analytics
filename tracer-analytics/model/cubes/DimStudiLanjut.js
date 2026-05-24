@@ -17,15 +17,19 @@ cube(`DimStudiLanjut`, {
     },
     sumber_biaya: {
       sql: `sumber_biaya`,
-      type: `string`,
+      type: `number`,
     },
-    tanggal_masuk: {
-      sql: `tanggal_masuk`,
+    valid_from: {
+      sql: `valid_from`,
       type: `time`,
     },
-    email_pembimbing: {
-      sql: `email_pembimbing`,
-      type: `string`,
+    valid_to: {
+      sql: `valid_to`,
+      type: `time`,
+    },
+    flag_studi_lanjut: {
+      sql: `flag_studi_lanjut`,
+      type: `boolean`,
     },
   },
 });

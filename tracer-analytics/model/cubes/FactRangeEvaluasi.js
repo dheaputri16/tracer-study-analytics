@@ -6,47 +6,65 @@ cube(`FactRangeEvaluasi`, {
       relationship: `many_to_one`,
       sql: `${FactRangeEvaluasi}.id_alumni = ${DimAlumni}.id_alumni`,
     },
+    DimProdi: {
+      relationship: `many_to_one`,
+      sql: `${FactRangeEvaluasi}.id_prodi = ${DimProdi}.id_prodi`,
+    },
     DimWaktu: {
       relationship: `many_to_one`,
       sql: `${FactRangeEvaluasi}.id_waktu = ${DimWaktu}.id_waktu`,
     },
-    DimPertanyaan: {
+    DimIndikatorEvaluasi: {
       relationship: `many_to_one`,
-      sql: `${FactRangeEvaluasi}.id_penilaian = ${DimPertanyaan}.id_pertanyaan`,
+      sql: `${FactRangeEvaluasi}.id_indikator_evaluasi = ${DimIndikatorEvaluasi}.id_indikator_evaluasi`,
     },
   },
 
   measures: {
     count: {
       type: `count`,
+      description: `Jumlah baris penilaian`,
     },
-
-    // Rata-rata skor untuk semua indikator
     avg_skor: {
       sql: `skor`,
       type: `avg`,
-      description: `Rata-rata skor evaluasi`,
+      description: `Rata-rata skor indikator evaluasi (1–5)`,
     },
-
-    // Skor total
-    sum_skor: {
+    min_skor: {
       sql: `skor`,
-      type: `sum`,
+      type: `min`,
     },
-
-    // Skor tertinggi
     max_skor: {
       sql: `skor`,
       type: `max`,
     },
+    sum_skor: {
+      sql: `skor`,
+      type: `sum`,
+    },
   },
 
   dimensions: {
-    id_multi_select: {
-      // Note: sesuaikan nama PK dengan ERD-mu
-      sql: `id_penilaian`,
+    id_fact: {
+      sql: `id_fact`,
       type: `number`,
       primary_key: true,
+    },
+    id_prodi: {
+      sql: `id_prodi`,
+      type: `number`,
+    },
+    id_alumni: {
+      sql: `id_alumni`,
+      type: `number`,
+    },
+    id_waktu: {
+      sql: `id_waktu`,
+      type: `number`,
+    },
+    id_indikator_evaluasi: {
+      sql: `id_indikator_evaluasi`,
+      type: `number`,
     },
     skor: {
       sql: `skor`,

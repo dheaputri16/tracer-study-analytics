@@ -7,32 +7,26 @@ cube(`DimAlumni`, {
       type: `number`,
       primary_key: true,
     },
-    nim: {
-      sql: `nim`,
-      type: `string`,
+    jenis_kelamin: {
+      sql: `jenis_kelamin`,
+      type: `number`,
+      // 1 = Laki-laki, 2 = Perempuan
     },
-    nama: {
-      sql: `nama`,
-      type: `string`,
-    },
-    email: {
-      sql: `email`,
-      type: `string`,
-    },
-    no_hp: {
-      sql: `no_hp`,
-      type: `string`,
-    },
-    npwp: {
-      sql: `npwp`,
+    angkatan: {
+      sql: `angkatan`,
       type: `string`,
     },
     tahun_lulus: {
       sql: `tahun_lulus`,
-      type: `number`,
+      type: `string`,
     },
     sumber_biaya_dipolban: {
       sql: `sumber_biaya_dipolban`,
+      type: `number`,
+      // kode f1201: 1=Biaya Sendiri, 2=ADIK, 3=BIDIKMISI, 4=PPA, 5=AFIRMASI, 6=Perusahaan, 7=Lainnya
+    },
+    label_sumber_biaya_dipolban: {
+      sql: `label_sumber_biaya_dipolban`,
       type: `string`,
     },
   },

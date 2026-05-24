@@ -19,9 +19,17 @@ cube(`DimProdi`, {
       sql: `jurusan`,
       type: `string`,
     },
-    jenis_akreditasi: {
-      sql: `jenis_akreditasi`,
-      type: `string`,
+    valid_from: {
+      sql: `valid_from`,
+      type: `time`,
+    },
+    valid_to: {
+      sql: `valid_to`,
+      type: `time`,
+    },
+    flag_prodi: {
+      sql: `flag_prodi`,
+      type: `boolean`,
     },
   },
 });

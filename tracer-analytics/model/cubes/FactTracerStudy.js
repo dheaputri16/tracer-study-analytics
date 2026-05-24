@@ -1,9 +1,6 @@
 cube(`FactTracerStudy`, {
   sql_table: `public.fact_tracer_study`,
 
-  // ======================
-  // JOINS ke semua dimensi
-  // ======================
   joins: {
     DimAlumni: {
       relationship: `many_to_one`,
@@ -21,9 +18,13 @@ cube(`FactTracerStudy`, {
       relationship: `many_to_one`,
       sql: `${FactTracerStudy}.id_status_alumni = ${DimStatusAlumni}.id_status_alumni`,
     },
-    DimKesesuaian: {
+    DimKesesuaianBidang: {
       relationship: `many_to_one`,
-      sql: `${FactTracerStudy}.id_kesesuaian = ${DimKesesuaian}.id_kesesuaian`,
+      sql: `${FactTracerStudy}.id_kesesuaian_bidang = ${DimKesesuaianBidang}.id_kesesuaian_bidang`,
+    },
+    DimKesesuaianLevel: {
+      relationship: `many_to_one`,
+      sql: `${FactTracerStudy}.id_kesesuaian_level = ${DimKesesuaianLevel}.id_kesesuaian_level`,
     },
     DimPerusahaan: {
       relationship: `many_to_one`,
@@ -33,128 +34,112 @@ cube(`FactTracerStudy`, {
       relationship: `many_to_one`,
       sql: `${FactTracerStudy}.id_studi_lanjut = ${DimStudiLanjut}.id_studi_lanjut`,
     },
+    DimWirausaha: {
+      relationship: `many_to_one`,
+      sql: `${FactTracerStudy}.id_wirausaha = ${DimWirausaha}.id_wirausaha`,
+    },
   },
 
-  // =====================
-  // MEASURES (angka/agregasi)
-  // =====================
-  // measures: {
-  //   // Jumlah total alumni yang mengisi tracer study
-  //   count_alumni: {
-  //     type: `count`,
-  //     description: `Total alumni yang mengisi tracer study`,
-  //   },
-
-  //   // Rata-rata masa tunggu kerja (bulan)
-  //   avg_masa_tunggu: {
-  //     sql: `masa_tunggu_bulan`,
-  //     type: `avg`,
-  //     description: `Rata-rata masa tunggu mendapat pekerjaan (bulan)`,
-  //   },
-
-  //   // Masa tunggu minimum
-  //   min_masa_tunggu: {
-  //     sql: `masa_tunggu_bulan`,
-  //     type: `min`,
-  //   },
-
-  //   // Masa tunggu maksimum
-  //   max_masa_tunggu: {
-  //     sql: `masa_tunggu_bulan`,
-  //     type: `max`,
-  //   },
-
-  //   // Jumlah alumni yang sudah bekerja
-  //   count_bekerja: {
-  //     type: `count`,
-  //     filters: [
-  //       {
-  //         sql: `${DimStatusAlumni}.kategori_terserap = 'Bekerja'`,
-  //       },
-  //     ],
-  //   },
-
-  //   // Jumlah alumni yang lanjut studi
-  //   count_studi_lanjut: {
-  //     type: `count`,
-  //     filters: [
-  //       {
-  //         sql: `${DimStatusAlumni}.kategori_terserap = 'Studi Lanjut'`,
-  //       },
-  //     ],
-  //   },
-
-  //   // Persentase alumni terserap (bekerja + studi lanjut)
-  //   pct_terserap: {
-  //     sql: `
-  //       ROUND(
-  //         100.0 * COUNT(CASE WHEN ${DimStatusAlumni}.kategori_terserap 
-  //           IN ('Bekerja', 'Studi Lanjut') THEN 1 END) 
-  //         / NULLIF(COUNT(*), 0), 2
-  //       )
-  //     `,
-  //     type: `number`,
-  //     format: `percent`,
-  //     description: `Persentase alumni terserap kerja/studi`,
-  //   },
-
-  //   // Rata-rata bulan sebelum lulus (kapan mulai cari kerja)
-  //   avg_bulan_sebelum_lulus: {
-  //     sql: `bulan_sebelum_lulus`,
-  //     type: `avg`,
-  //   },
-
-  //   // Rata-rata bulan sesudah lulus mendapat kerja
-  //   avg_bulan_sesudah_lulus: {
-  //     sql: `bulan_sesudah_lulus`,
-  //     type: `avg`,
-  //   },
-  // },
-
-  // FactTracerStudy.js — bagian measures yang DIPERBAIKI
   measures: {
     count_alumni: {
       type: `count`,
       description: `Total alumni yang mengisi tracer study`,
     },
-
-    avg_masa_tunggu: {
-      sql: `masa_tunggu_bulan`,
+    avg_masa_tunggu_bekerja: {
+      sql: `masa_tunggu_bekerja`,
       type: `avg`,
+      description: `Rata-rata masa tunggu mendapat pekerjaan pertama (bulan)`,
     },
-
-    min_masa_tunggu: {
-      sql: `masa_tunggu_bulan`,
+    min_masa_tunggu_bekerja: {
+      sql: `masa_tunggu_bekerja`,
       type: `min`,
     },
-
-    max_masa_tunggu: {
-      sql: `masa_tunggu_bulan`,
+    max_masa_tunggu_bekerja: {
+      sql: `masa_tunggu_bekerja`,
       type: `max`,
     },
-
+    avg_masa_tunggu_wirausaha: {
+      sql: `masa_tunggu_wirausaha`,
+      type: `avg`,
+      description: `Rata-rata masa tunggu memulai wirausaha setelah lulus (bulan)`,
+    },
+    min_masa_tunggu_wirausaha: {
+      sql: `masa_tunggu_wirausaha`,
+      type: `min`,
+    },
+    max_masa_tunggu_wirausaha: {
+      sql: `masa_tunggu_wirausaha`,
+      type: `max`,
+    },
     avg_bulan_sebelum_lulus: {
       sql: `bulan_sebelum_lulus`,
       type: `avg`,
+      description: `Rata-rata bulan sebelum lulus mulai mencari kerja`,
     },
-
     avg_bulan_sesudah_lulus: {
       sql: `bulan_sesudah_lulus`,
       type: `avg`,
+      description: `Rata-rata bulan sesudah lulus mendapat pekerjaan`,
+    },
+    avg_take_home_pay: {
+      sql: `take_home_pay`,
+      type: `avg`,
+      description: `Rata-rata gaji/pendapatan per bulan (take home pay)`,
+    },
+    min_take_home_pay: {
+      sql: `take_home_pay`,
+      type: `min`,
+    },
+    max_take_home_pay: {
+      sql: `take_home_pay`,
+      type: `max`,
     },
   },
 
-  // =====================
-  // DIMENSIONS (atribut dari fact sendiri)
-  // =====================
   dimensions: {
     id_fact: {
       sql: `id_fact`,
       type: `number`,
       primary_key: true,
     },
-    masa_tunggu_bulan: {
-      sql: `masa_tunggu_bulan`,
+    id_alumni: {
+      sql: `id_alumni`,
+      type: `number`,
+    },
+    id_waktu: {
+      sql: `id_waktu`,
+      type: `number`,
+    },
+    id_prodi: {
+      sql: `id_prodi`,
+      type: `number`,
+    },
+    id_status_alumni: {
+      sql: `id_status_alumni`,
+      type: `number`,
+    },
+    id_kesesuaian_bidang: {
+      sql: `id_kesesuaian_bidang`,
+      type: `number`,
+    },
+    id_kesesuaian_level: {
+      sql: `id_kesesuaian_level`,
+      type: `number`,
+    },
+    id_perusahaan: {
+      sql: `id_perusahaan`,
+      type: `number`,
+    },
+    id_studi_lanjut: {
+      sql: `id_studi_lanjut`,
+      type: `number`,
+    },
+    id_wirausaha: {
+      sql: `id_wirausaha`,
+      type: `number`,
+    },
+    masa_tunggu_bekerja: {
+      sql: `masa_tunggu_bekerja`,
       type: `number`,
     },
     bulan_sebelum_lulus: {
@@ -163,6 +148,14 @@ cube(`FactTracerStudy`, {
     },
     bulan_sesudah_lulus: {
       sql: `bulan_sesudah_lulus`,
+      type: `number`,
+    },
+    masa_tunggu_wirausaha: {
+      sql: `masa_tunggu_wirausaha`,
+      type: `number`,
+    },
+    take_home_pay: {
+      sql: `take_home_pay`,
       type: `number`,
     },
   },

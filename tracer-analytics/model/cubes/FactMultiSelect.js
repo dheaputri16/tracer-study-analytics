@@ -6,35 +6,29 @@ cube(`FactMultiSelect`, {
       relationship: `many_to_one`,
       sql: `${FactMultiSelect}.id_alumni = ${DimAlumni}.id_alumni`,
     },
-    DimPertanyaan: {
+    DimProdi: {
       relationship: `many_to_one`,
-      sql: `${FactMultiSelect}.id_pertanyaan = ${DimPertanyaan}.id_pertanyaan`,
+      sql: `${FactMultiSelect}.id_prodi = ${DimProdi}.id_prodi`,
     },
-    DimOpsi: {
+    DimWaktu: {
       relationship: `many_to_one`,
-      sql: `${FactMultiSelect}.id_opsi = ${DimOpsi}.id_opsi`,
+      sql: `${FactMultiSelect}.id_waktu = ${DimWaktu}.id_waktu`,
+    },
+    DimIndikatorEvaluasi: {
+      relationship: `many_to_one`,
+      sql: `${FactMultiSelect}.id_indikator_evaluasi = ${DimIndikatorEvaluasi}.id_indikator_evaluasi`,
     },
   },
 
   measures: {
-    // Berapa kali opsi ini dipilih alumni
     count_pilihan: {
       type: `count`,
-      description: `Jumlah alumni memilih opsi ini`,
+      description: `Jumlah pemilihan opsi oleh alumni`,
     },
-
-    // Persentase pemilih opsi tertentu dari total responden
-    pct_pilihan: {
-      sql: `
-        ROUND(
-          100.0 * COUNT(*) / NULLIF(
-            (SELECT COUNT(DISTINCT id_alumni) FROM public.fact_multi_select),
-            0
-          ), 2
-        )
-      `,
-      type: `number`,
-      format: `percent`,
+    count_alumni_unik: {
+      sql: `id_alumni`,
+      type: `count_distinct`,
+      description: `Jumlah alumni unik yang memilih opsi ini`,
     },
   },
 
@@ -43,6 +37,23 @@ cube(`FactMultiSelect`, {
       sql: `id_multi_select`,
       type: `number`,
       primary_key: true,
+    },
+    id_alumni: {
+      sql: `id_alumni`,
+      type: `number`,
+    },
+    id_prodi: {
+      sql: `id_prodi`,
+      type: `number`,
+    },
+    id_waktu: {
+      sql: `id_waktu`,
+      type: `number`,
+    },
+    id_indikator_evaluasi: {
+      sql: `id_indikator_evaluasi`,
+      type: `number`,
+      // id 22–34 = opsi AlasanKerjaTdkSesuai (f1601–f1613)
     },
   },
 });

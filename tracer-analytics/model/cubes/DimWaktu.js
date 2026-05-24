@@ -7,13 +7,21 @@ cube(`DimWaktu`, {
       type: `number`,
       primary_key: true,
     },
-    periode_survei: {
-      sql: `periode_survei`,
+    minggu_snapshot: {
+      sql: `minggu_snapshot`,
       type: `string`,
     },
-    tahun_lulus: {
-      sql: `tahun_lulus`,
-      type: `number`,
+    bulan_snapshot: {
+      sql: `bulan_snapshot`,
+      type: `string`,
+    },
+    tahun_snapshot: {
+      sql: `tahun_snapshot`,
+      type: `string`,
+    },
+    tanggal_refresh: {
+      sql: `tanggal_refresh`,
+      type: `time`,
     },
   },
 });
