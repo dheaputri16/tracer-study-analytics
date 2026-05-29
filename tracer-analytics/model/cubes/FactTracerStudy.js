@@ -12,23 +12,23 @@ cube(`FactTracerStudy`, {
     },
     DimProdi: {
       relationship: `many_to_one`,
-      sql: `${FactTracerStudy}.id_prodi = ${DimProdi}.id_prodi`,
+      sql: `${FactTracerStudy}.prodi_sk = ${DimProdi}.prodi_sk`,
     },
     DimStatusAlumni: {
       relationship: `many_to_one`,
-      sql: `${FactTracerStudy}.id_status_alumni = ${DimStatusAlumni}.id_status_alumni`,
+      sql: `${FactTracerStudy}.status_alumni_sk = ${DimStatusAlumni}.status_alumni_sk`,
     },
     DimKesesuaianBidang: {
       relationship: `many_to_one`,
-      sql: `${FactTracerStudy}.id_kesesuaian_bidang = ${DimKesesuaianBidang}.id_kesesuaian_bidang`,
+      sql: `${FactTracerStudy}.kesesuaian_bidang_sk = ${DimKesesuaianBidang}.kesesuaian_bidang_sk`,
     },
     DimKesesuaianLevel: {
       relationship: `many_to_one`,
-      sql: `${FactTracerStudy}.id_kesesuaian_level = ${DimKesesuaianLevel}.id_kesesuaian_level`,
+      sql: `${FactTracerStudy}.kesesuaian_level_sk = ${DimKesesuaianLevel}.kesesuaian_level_sk`,
     },
     DimPerusahaan: {
       relationship: `many_to_one`,
-      sql: `${FactTracerStudy}.id_perusahaan = ${DimPerusahaan}.id_perusahaan`,
+      sql: `${FactTracerStudy}.perusahaan_sk = ${DimPerusahaan}.perusahaan_sk`,
     },
     DimStudiLanjut: {
       relationship: `many_to_one`,
@@ -36,7 +36,7 @@ cube(`FactTracerStudy`, {
     },
     DimWirausaha: {
       relationship: `many_to_one`,
-      sql: `${FactTracerStudy}.id_wirausaha = ${DimWirausaha}.id_wirausaha`,
+      sql: `${FactTracerStudy}.wirausaha_sk = ${DimWirausaha}.wirausaha_sk`,
     },
   },
 

@@ -8,7 +8,7 @@ cube(`FactRangeEvaluasi`, {
     },
     DimProdi: {
       relationship: `many_to_one`,
-      sql: `${FactRangeEvaluasi}.id_prodi = ${DimProdi}.id_prodi`,
+      sql: `${FactRangeEvaluasi}.prodi_sk = ${DimProdi}.prodi_sk`,
     },
     DimWaktu: {
       relationship: `many_to_one`,
@@ -50,8 +50,8 @@ cube(`FactRangeEvaluasi`, {
       type: `number`,
       primary_key: true,
     },
-    id_prodi: {
-      sql: `id_prodi`,
+    prodi_sk: {
+      sql: `prodi_sk`,
       type: `number`,
     },
     id_alumni: {

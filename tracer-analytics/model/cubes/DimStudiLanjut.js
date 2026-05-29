@@ -19,17 +19,5 @@ cube(`DimStudiLanjut`, {
       sql: `sumber_biaya`,
       type: `number`,
     },
-    valid_from: {
-      sql: `valid_from`,
-      type: `time`,
-    },
-    valid_to: {
-      sql: `valid_to`,
-      type: `time`,
-    },
-    flag_studi_lanjut: {
-      sql: `flag_studi_lanjut`,
-      type: `boolean`,
-    },
   },
 });

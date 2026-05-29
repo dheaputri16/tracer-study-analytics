@@ -7,6 +7,15 @@ cube(`DimAlumni`, {
       type: `number`,
       primary_key: true,
     },
+    nama: {
+      sql: `nama`,
+      type: `string`,
+    },
+    nim: {
+      sql: `nim`,
+      type: `string`,
+    },
+    // ─────────────────────────────────────────────────────────
     jenis_kelamin: {
       sql: `jenis_kelamin`,
       type: `number`,
@@ -23,7 +32,8 @@ cube(`DimAlumni`, {
     sumber_biaya_dipolban: {
       sql: `sumber_biaya_dipolban`,
       type: `number`,
-      // kode f1201: 1=Biaya Sendiri, 2=ADIK, 3=BIDIKMISI, 4=PPA, 5=AFIRMASI, 6=Perusahaan, 7=Lainnya
+      // kode f1201: 1=Biaya Sendiri, 2=ADIK, 3=BIDIKMISI,
+      //             4=PPA, 5=AFIRMASI, 6=Perusahaan, 7=Lainnya
     },
     label_sumber_biaya_dipolban: {
       sql: `label_sumber_biaya_dipolban`,

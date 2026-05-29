@@ -8,7 +8,7 @@ cube(`FactMultiSelect`, {
     },
     DimProdi: {
       relationship: `many_to_one`,
-      sql: `${FactMultiSelect}.id_prodi = ${DimProdi}.id_prodi`,
+      sql: `${FactMultiSelect}.prodi_sk = ${DimProdi}.prodi_sk`,
     },
     DimWaktu: {
       relationship: `many_to_one`,
@@ -42,8 +42,8 @@ cube(`FactMultiSelect`, {
       sql: `id_alumni`,
       type: `number`,
     },
-    id_prodi: {
-      sql: `id_prodi`,
+    prodi_sk: {
+      sql: `prodi_sk`,
       type: `number`,
     },
     id_waktu: {
