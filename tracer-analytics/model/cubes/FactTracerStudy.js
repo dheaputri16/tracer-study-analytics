@@ -422,6 +422,35 @@ cube(`FactTracerStudy`, {
       sql: `${DimPerusahaan}.company_name`,
       type: `string`,
     },
+    label_jenis_perusahaan: {
+      sql: `${DimPerusahaan}.label_jenis_perusahaan`,
+      type: `string`,
+      description: `Swasta, BUMN/BUMD, Pemerintah, Multilateral, dll`,
+    },
+    label_tingkat_instansi: {
+      sql: `${DimPerusahaan}.label_tingkat_instansi`,
+      type: `string`,
+      description: `Lokal, Nasional, Internasional`,
+    },
+    nama_kota_kerja: {
+      sql: `${DimPerusahaan}.nama_kota`,
+      type: `string`,
+    },
+    nama_provinsi_kerja: {
+      sql: `${DimPerusahaan}.nama_provinsi`,
+      type: `string`,
+    },
+
+    // ── Dari DimWirausaha ──────────────────────────────────────
+    jabatan_wirausaha: {
+      sql: `${DimWirausaha}.jabatan`,
+      type: `string`,
+    },
+    tingkat_wirausaha: {
+      sql: `${DimWirausaha}.label_tingkat_instansi`,
+      type: `string`,
+      description: `Skala wirausaha: Lokal, Nasional, Internasional`,
+    },
 
     // ── Dari DimStudiLanjut ────────────────────────────────────
     perguruan_tinggi_lanjut: {
@@ -436,7 +465,12 @@ cube(`FactTracerStudy`, {
 
   // ─────────────────────────────────────────────────────────────
   //  PRE-AGGREGATIONS
-  //  Pre-aggregation untuk optimasi query di dashboard utama.
+  //
+  //  Kenapa sekarang bisa di-pre-aggregate penuh?
+  //  Karena semua join menggunakan surrogate key statis.
+  //  Tidak ada kondisi join dinamis (tanggal_refresh) yang
+  //  mencegah Cube.js meng-cache hasil query.
+  //
   //  Cube.js bisa match query ke pre-aggregation yang tersimpan
   //  ketika measures dan dimensions yang diminta adalah subset
   //  dari yang didefinisikan di pre-aggregation ini.
@@ -553,6 +587,10 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.count_alumni,
       ],
       dimensions: [
+        FactTracerStudy.label_jenis_perusahaan,
+        FactTracerStudy.label_tingkat_instansi,
+        FactTracerStudy.nama_kota_kerja,
+        FactTracerStudy.nama_provinsi_kerja,
         FactTracerStudy.jenjang,
         FactTracerStudy.jurusan,
         FactTracerStudy.nama_prodi,
