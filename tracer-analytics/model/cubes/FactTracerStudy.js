@@ -262,6 +262,11 @@ cube(`FactTracerStudy`, {
   //     Kalau data tumbuh ke skala puluhan juta baris,
   //     baru pertimbangkan denormalisasi label ke fact.
   //
+  //  HIERARKI PRODI (drill-down):
+  //  DimProdi.jenjang → DimProdi.jurusan → DimProdi.nama_prodi
+  //  User bisa drill dari "D3 berapa % terserap?" ke
+  //  "jurusan mana?" ke "prodi spesifik mana?"
+  // ─────────────────────────────────────────────────────────────
 
   dimensions: {
 
@@ -301,6 +306,47 @@ cube(`FactTracerStudy`, {
       sql: `${DimStatusAlumni}.label`,
       type: `string`,
       description: `Bekerja, Wiraswasta, Melanjutkan Pendidikan, dll`,
+    },
+
+    // ── Dari DimProdi — HIERARKI TIGA LEVEL ───────────────────
+    //
+    // Hierarki untuk drill-down analitik:
+    //   Level 1: jenjang   → D3, D4, S1, S2
+    //   Level 2: jurusan   → Teknik Sipil, Teknik Elektro, dll
+    //   Level 3: nama_prodi → Teknik Konstruksi Gedung, dll
+    //
+    // Cara pakai di backend:
+    //   - group by jenjang → perbandingan D3 vs D4
+    //   - group by jurusan (filter jenjang=D3) → drill ke jurusan
+    //   - group by nama_prodi (filter jurusan=X) → detail prodi
+    //
+    // Data historis akurat karena surrogate key sudah membawa
+    // versi yang benar — prodi ganti nama = sk baru di fact baru.
+
+    // Level 1 — paling kasar, untuk perbandingan antar jenjang
+    jenjang: {
+      sql: `${DimProdi}.jenjang`,
+      type: `string`,
+      description: `Level 1 drill-down hierarki prodi: D3, D4, S1, S2`,
+    },
+
+    // Level 2 — menengah, untuk perbandingan antar jurusan
+    jurusan: {
+      sql: `${DimProdi}.jurusan`,
+      type: `string`,
+      description: `Level 2 drill-down: nama jurusan (Teknik Sipil, Akuntansi, dll)`,
+    },
+
+    // Level 3 — paling detail, untuk analisis per prodi spesifik
+    nama_prodi: {
+      sql: `${DimProdi}.nama_prodi`,
+      type: `string`,
+      description: `Level 3 drill-down: nama program studi spesifik`,
+    },
+    kode_prodi: {
+      sql: `${DimProdi}.kode_prodi`,
+      type: `string`,
+      description: `Kode singkat prodi: TKG, TI, AKT, dll`,
     },
 
     // ── Dari DimWaktu ──────────────────────────────────────────
@@ -385,6 +431,137 @@ cube(`FactTracerStudy`, {
     program_studi_lanjut: {
       sql: `${DimStudiLanjut}.program_studi`,
       type: `string`,
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  //  PRE-AGGREGATIONS
+  //  Pre-aggregation untuk optimasi query di dashboard utama.
+  //  Cube.js bisa match query ke pre-aggregation yang tersimpan
+  //  ketika measures dan dimensions yang diminta adalah subset
+  //  dari yang didefinisikan di pre-aggregation ini.
+  //
+  //  Refresh strategy:
+  //  - Cek setiap jam: SELECT MAX(tanggal_refresh) FROM dim_waktu
+  //  - Kalau berubah = ETL mingguan sudah jalan
+  //  - Rebuild pre-aggregation yang terpengaruh
+  //  - Efektif hanya rebuild seminggu sekali
+  //
+  //  Requirement:
+  //  - Redis untuk menyimpan pre-aggregation
+  //  - Set CUBEJS_REDIS_URL di environment Cube.js
+  // ─────────────────────────────────────────────────────────────
+
+  pre_aggregations: {
+
+    // Grafik utama: keterserapan, distribusi status, KPI per prodi.
+    // Include hierarki prodi lengkap untuk support drill-down
+    // dari jenjang → jurusan → prodi tanpa query tambahan.
+    utama_per_hierarki_prodi_tahun: {
+      measures: [
+        FactTracerStudy.count_alumni,
+        FactTracerStudy.count_terserap,
+        FactTracerStudy.count_masa_tunggu_cepat,
+        FactTracerStudy.avg_masa_tunggu_bekerja,
+        FactTracerStudy.avg_take_home_pay,
+        FactTracerStudy.count_sesuai_bidang,
+        FactTracerStudy.count_tidak_sesuai_bidang,
+      ],
+      dimensions: [
+        // Hierarki prodi — tiga level untuk drill-down
+        FactTracerStudy.jenjang,
+        FactTracerStudy.jurusan,
+        FactTracerStudy.nama_prodi,
+        // Status dan waktu
+        FactTracerStudy.status_label,
+        FactTracerStudy.tahun_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 hour`,
+      },
+    },
+
+    // Grafik distribusi masa tunggu kerja per prodi dan tahun.
+    distribusi_masa_tunggu: {
+      measures: [
+        FactTracerStudy.count_tunggu_0_3_bulan,
+        FactTracerStudy.count_tunggu_3_6_bulan,
+        FactTracerStudy.count_tunggu_lebih_6_bulan,
+        FactTracerStudy.avg_masa_tunggu_bekerja,
+        FactTracerStudy.min_masa_tunggu_bekerja,
+        FactTracerStudy.max_masa_tunggu_bekerja,
+      ],
+      dimensions: [
+        FactTracerStudy.jenjang,
+        FactTracerStudy.jurusan,
+        FactTracerStudy.nama_prodi,
+        FactTracerStudy.tahun_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 hour`,
+      },
+    },
+
+    // Grafik distribusi dan rata-rata gaji lulusan.
+    distribusi_gaji: {
+      measures: [
+        FactTracerStudy.avg_take_home_pay,
+        FactTracerStudy.min_take_home_pay,
+        FactTracerStudy.max_take_home_pay,
+      ],
+      dimensions: [
+        FactTracerStudy.jenjang,
+        FactTracerStudy.jurusan,
+        FactTracerStudy.nama_prodi,
+        FactTracerStudy.status_label,
+        FactTracerStudy.tahun_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 hour`,
+      },
+    },
+
+    // Grafik kesesuaian bidang dan level pendidikan.
+    distribusi_kesesuaian: {
+      measures: [
+        FactTracerStudy.count_alumni,
+        FactTracerStudy.count_sesuai_bidang,
+        FactTracerStudy.count_tidak_sesuai_bidang,
+      ],
+      dimensions: [
+        FactTracerStudy.kesesuaian_bidang_label,
+        FactTracerStudy.kesesuaian_level_label,
+        FactTracerStudy.jenjang,
+        FactTracerStudy.jurusan,
+        FactTracerStudy.nama_prodi,
+        FactTracerStudy.tahun_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 hour`,
+      },
+    },
+
+    // Grafik sebaran instansi dan lokasi kerja alumni.
+    // Label jenis/tingkat/kota/provinsi dari dim_perusahaan
+    // sudah statis (surrogate key join) — bisa di-cache penuh.
+    sebaran_instansi_lokasi: {
+      measures: [
+        FactTracerStudy.count_alumni,
+      ],
+      dimensions: [
+        FactTracerStudy.jenjang,
+        FactTracerStudy.jurusan,
+        FactTracerStudy.nama_prodi,
+        FactTracerStudy.tahun_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 hour`,
+      },
     },
   },
 });
