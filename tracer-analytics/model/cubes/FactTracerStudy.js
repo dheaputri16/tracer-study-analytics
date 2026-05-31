@@ -9,6 +9,13 @@
 // - Data SmartTracer (<1 juta baris) belum butuh optimasi ini
 // - Join statis (surrogate key) sudah bisa di-pre-aggregate
 // - Kalau data tumbuh besar, baru pertimbangkan denormalisasi
+//
+// CATATAN CUBE.JS:
+// Dimension dari joined cube TIDAK boleh didefinisikan di sini.
+// Cube.js membutuhkan setiap dimension didefinisikan di cube
+// pemiliknya masing-masing agar pre-aggregation bisa di-cache
+// dengan benar. Query dari backend menggunakan nama cube asli,
+// contoh: DimProdi.jenjang, DimStatusAlumni.label, dst.
 
 cube(`FactTracerStudy`, {
   sql_table: `public.fact_tracer_study`,
@@ -110,8 +117,9 @@ cube(`FactTracerStudy`, {
     // ── DINAMIS ────────────────────────────────────────────────
 
     // Measure utama — dipakai untuk semua grafik count.
-    // Backend group by status_label / nama_prodi / tahun_snapshot
-    // untuk dapat breakdown apapun tanpa ubah kode ini.
+    // Backend group by DimStatusAlumni.label / DimProdi.nama_prodi
+    // / DimWaktu.tahun_snapshot untuk dapat breakdown apapun
+    // tanpa ubah kode ini.
     count_alumni: {
       type: `count`,
       description: `Total alumni yang mengisi tracer study`,
@@ -253,16 +261,19 @@ cube(`FactTracerStudy`, {
   // ─────────────────────────────────────────────────────────────
   //  DIMENSIONS
   //
-  //  1. KOLOM DARI FACT — surrogate keys dan numerik.
-  //     Untuk filter, reference, dan pre-aggregation dasar.
+  //  Hanya kolom NATIVE dari tabel fact_tracer_study.
   //
-  //  2. DARI JOIN DIMENSI — label dan atribut deskriptif.
-  //     Tidak perlu denormalisasi ke fact karena join surrogate
-  //     key sudah statis — pre-aggregation tetap bisa jalan.
-  //     Kalau data tumbuh ke skala puluhan juta baris,
-  //     baru pertimbangkan denormalisasi label ke fact.
+  //  ATURAN CUBE.JS:
+  //  Dimension dari joined cube (DimProdi, DimStatusAlumni, dll)
+  //  TIDAK boleh didefinisikan di sini — harus di cube masing-
+  //  masing. Lihat file DimProdi.js, DimStatusAlumni.js, dst.
   //
-  //  HIERARKI PRODI (drill-down):
+  //  Untuk query backend, gunakan nama cube aslinya langsung:
+  //    DimProdi.jenjang        (bukan FactTracerStudy.jenjang)
+  //    DimStatusAlumni.label   (bukan FactTracerStudy.status_label)
+  //    DimWaktu.tahun_snapshot (bukan FactTracerStudy.tahun_snapshot)
+  //
+  //  HIERARKI PRODI (drill-down) — didefinisikan di DimProdi.js:
   //  DimProdi.jenjang → DimProdi.jurusan → DimProdi.nama_prodi
   //  User bisa drill dari "D3 berapa % terserap?" ke
   //  "jurusan mana?" ke "prodi spesifik mana?"
@@ -279,7 +290,8 @@ cube(`FactTracerStudy`, {
 
     // ── Surrogate keys dari fact ───────────────────────────────
     // Dipakai untuk filter numerik dan referensi join.
-    // Untuk display, pakai label dari dimensi via join di bawah.
+    // Untuk display label, pakai dimension dari cube dimensinya
+    // langsung: DimStatusAlumni.label, DimProdi.nama_prodi, dst.
     id_alumni:            { sql: `id_alumni`,            type: `number` },
     id_waktu:             { sql: `id_waktu`,             type: `number` },
     prodi_sk:             { sql: `prodi_sk`,             type: `number` },
@@ -296,171 +308,6 @@ cube(`FactTracerStudy`, {
     bulan_sesudah_lulus:   { sql: `bulan_sesudah_lulus`,   type: `number` },
     masa_tunggu_wirausaha: { sql: `masa_tunggu_wirausaha`, type: `number` },
     take_home_pay:         { sql: `take_home_pay`,         type: `number` },
-
-    // ── Dari DimStatusAlumni ───────────────────────────────────
-    // group by ini → breakdown per status otomatis dinamis.
-    // Status baru di dim_status_alumni langsung muncul
-    // tanpa ubah kode Cube.js — cukup tambah row di DW
-    // dan update OptionRegistry.php di ETL.
-    status_label: {
-      sql: `${DimStatusAlumni}.label`,
-      type: `string`,
-      description: `Bekerja, Wiraswasta, Melanjutkan Pendidikan, dll`,
-    },
-
-    // ── Dari DimProdi — HIERARKI TIGA LEVEL ───────────────────
-    //
-    // Hierarki untuk drill-down analitik:
-    //   Level 1: jenjang   → D3, D4, S1, S2
-    //   Level 2: jurusan   → Teknik Sipil, Teknik Elektro, dll
-    //   Level 3: nama_prodi → Teknik Konstruksi Gedung, dll
-    //
-    // Cara pakai di backend:
-    //   - group by jenjang → perbandingan D3 vs D4
-    //   - group by jurusan (filter jenjang=D3) → drill ke jurusan
-    //   - group by nama_prodi (filter jurusan=X) → detail prodi
-    //
-    // Data historis akurat karena surrogate key sudah membawa
-    // versi yang benar — prodi ganti nama = sk baru di fact baru.
-
-    // Level 1 — paling kasar, untuk perbandingan antar jenjang
-    jenjang: {
-      sql: `${DimProdi}.jenjang`,
-      type: `string`,
-      description: `Level 1 drill-down hierarki prodi: D3, D4, S1, S2`,
-    },
-
-    // Level 2 — menengah, untuk perbandingan antar jurusan
-    jurusan: {
-      sql: `${DimProdi}.jurusan`,
-      type: `string`,
-      description: `Level 2 drill-down: nama jurusan (Teknik Sipil, Akuntansi, dll)`,
-    },
-
-    // Level 3 — paling detail, untuk analisis per prodi spesifik
-    nama_prodi: {
-      sql: `${DimProdi}.nama_prodi`,
-      type: `string`,
-      description: `Level 3 drill-down: nama program studi spesifik`,
-    },
-    kode_prodi: {
-      sql: `${DimProdi}.kode_prodi`,
-      type: `string`,
-      description: `Kode singkat prodi: TKG, TI, AKT, dll`,
-    },
-
-    // ── Dari DimWaktu ──────────────────────────────────────────
-    // Untuk filter periode dan grafik tren antar waktu.
-    // DimWaktu tidak ada SCD — aman dipakai langsung.
-    tahun_snapshot: {
-      sql: `${DimWaktu}.tahun_snapshot`,
-      type: `string`,
-      description: `Tahun ETL jalan — untuk filter dan tren antar tahun`,
-    },
-    bulan_snapshot: {
-      sql: `${DimWaktu}.bulan_snapshot`,
-      type: `string`,
-      description: `Bulan ETL jalan — untuk tren bulanan`,
-    },
-    minggu_snapshot: {
-      sql: `${DimWaktu}.minggu_snapshot`,
-      type: `string`,
-      description: `Minggu ke-N dalam bulan saat ETL jalan`,
-    },
-    tanggal_refresh: {
-      sql: `${DimWaktu}.tanggal_refresh`,
-      type: `time`,
-      description: `Tanggal tepat ETL jalan`,
-    },
-
-    // ── Dari DimAlumni ─────────────────────────────────────────
-    // Untuk modal detail alumni dan filter per angkatan.
-    nim: {
-      sql: `${DimAlumni}.nim`,
-      type: `string`,
-      description: `Nomor Induk Mahasiswa — business key alumni`,
-    },
-    nama_alumni: {
-      sql: `${DimAlumni}.nama`,
-      type: `string`,
-    },
-    angkatan: {
-      sql: `${DimAlumni}.angkatan`,
-      type: `string`,
-      description: `Tahun masuk kuliah`,
-    },
-    tahun_lulus: {
-      sql: `${DimAlumni}.tahun_lulus`,
-      type: `string`,
-    },
-
-    // ── Dari DimKesesuaianBidang ───────────────────────────────
-    // group by ini → distribusi kesesuaian otomatis dinamis.
-    // Kategori baru = row baru di dim_kesesuaian_bidang dengan
-    // sk baru. Fact baru pakai sk baru. Langsung muncul di grafik.
-    kesesuaian_bidang_label: {
-      sql: `${DimKesesuaianBidang}.label`,
-      type: `string`,
-      description: `Sangat Erat / Erat / Cukup Erat / Kurang Erat / Tidak Sama Sekali`,
-    },
-
-    // ── Dari DimKesesuaianLevel ────────────────────────────────
-    kesesuaian_level_label: {
-      sql: `${DimKesesuaianLevel}.label`,
-      type: `string`,
-      description: `Setingkat Lebih Tinggi / Sama / Lebih Rendah / Tidak Perlu`,
-    },
-
-    // ── Dari DimPerusahaan ─────────────────────────────────────
-    // Label jenis, tingkat, kota, provinsi sudah disimpan
-    // sebagai kolom teks di dim_perusahaan saat ETL.
-    // group by label_jenis_perusahaan → distribusi jenis instansi
-    // group by label_tingkat_instansi → Lokal/Nasional/Internasional
-    // group by nama_kota_kerja → sebaran kota kerja alumni
-    // Semua dinamis — kategori baru langsung muncul.
-    nama_perusahaan: {
-      sql: `${DimPerusahaan}.company_name`,
-      type: `string`,
-    },
-    label_jenis_perusahaan: {
-      sql: `${DimPerusahaan}.label_jenis_perusahaan`,
-      type: `string`,
-      description: `Swasta, BUMN/BUMD, Pemerintah, Multilateral, dll`,
-    },
-    label_tingkat_instansi: {
-      sql: `${DimPerusahaan}.label_tingkat_instansi`,
-      type: `string`,
-      description: `Lokal, Nasional, Internasional`,
-    },
-    nama_kota_kerja: {
-      sql: `${DimPerusahaan}.nama_kota`,
-      type: `string`,
-    },
-    nama_provinsi_kerja: {
-      sql: `${DimPerusahaan}.nama_provinsi`,
-      type: `string`,
-    },
-
-    // ── Dari DimWirausaha ──────────────────────────────────────
-    jabatan_wirausaha: {
-      sql: `${DimWirausaha}.jabatan`,
-      type: `string`,
-    },
-    tingkat_wirausaha: {
-      sql: `${DimWirausaha}.label_tingkat_instansi`,
-      type: `string`,
-      description: `Skala wirausaha: Lokal, Nasional, Internasional`,
-    },
-
-    // ── Dari DimStudiLanjut ────────────────────────────────────
-    perguruan_tinggi_lanjut: {
-      sql: `${DimStudiLanjut}.perguruan_tinggi`,
-      type: `string`,
-    },
-    program_studi_lanjut: {
-      sql: `${DimStudiLanjut}.program_studi`,
-      type: `string`,
-    },
   },
 
   // ─────────────────────────────────────────────────────────────
@@ -474,6 +321,11 @@ cube(`FactTracerStudy`, {
   //  Cube.js bisa match query ke pre-aggregation yang tersimpan
   //  ketika measures dan dimensions yang diminta adalah subset
   //  dari yang didefinisikan di pre-aggregation ini.
+  //
+  //  PENTING — cara reference dimension di pre-aggregation:
+  //  Harus pakai nama cube aslinya (DimProdi.jenjang),
+  //  bukan alias lama (FactTracerStudy.jenjang) yang sudah
+  //  dihapus karena melanggar aturan Cube.js.
   //
   //  Refresh strategy:
   //  - Cek setiap jam: SELECT MAX(tanggal_refresh) FROM dim_waktu
@@ -502,13 +354,16 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.count_tidak_sesuai_bidang,
       ],
       dimensions: [
-        // Hierarki prodi — tiga level untuk drill-down
-        FactTracerStudy.jenjang,
-        FactTracerStudy.jurusan,
-        FactTracerStudy.nama_prodi,
+        // Hierarki prodi — tiga level untuk drill-down.
+        // Reference ke DimProdi langsung (bukan FactTracerStudy.jenjang)
+        // karena Cube.js mensyaratkan dimension didefinisikan
+        // di cube pemiliknya.
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
         // Status dan waktu
-        FactTracerStudy.status_label,
-        FactTracerStudy.tahun_snapshot,
+        DimStatusAlumni.label,
+        DimWaktu.tahun_snapshot,
       ],
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
@@ -527,10 +382,10 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.max_masa_tunggu_bekerja,
       ],
       dimensions: [
-        FactTracerStudy.jenjang,
-        FactTracerStudy.jurusan,
-        FactTracerStudy.nama_prodi,
-        FactTracerStudy.tahun_snapshot,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimWaktu.tahun_snapshot,
       ],
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
@@ -546,11 +401,11 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.max_take_home_pay,
       ],
       dimensions: [
-        FactTracerStudy.jenjang,
-        FactTracerStudy.jurusan,
-        FactTracerStudy.nama_prodi,
-        FactTracerStudy.status_label,
-        FactTracerStudy.tahun_snapshot,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimStatusAlumni.label,
+        DimWaktu.tahun_snapshot,
       ],
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
@@ -566,12 +421,12 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.count_tidak_sesuai_bidang,
       ],
       dimensions: [
-        FactTracerStudy.kesesuaian_bidang_label,
-        FactTracerStudy.kesesuaian_level_label,
-        FactTracerStudy.jenjang,
-        FactTracerStudy.jurusan,
-        FactTracerStudy.nama_prodi,
-        FactTracerStudy.tahun_snapshot,
+        DimKesesuaianBidang.label,
+        DimKesesuaianLevel.label,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimWaktu.tahun_snapshot,
       ],
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
@@ -587,14 +442,14 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.count_alumni,
       ],
       dimensions: [
-        FactTracerStudy.label_jenis_perusahaan,
-        FactTracerStudy.label_tingkat_instansi,
-        FactTracerStudy.nama_kota_kerja,
-        FactTracerStudy.nama_provinsi_kerja,
-        FactTracerStudy.jenjang,
-        FactTracerStudy.jurusan,
-        FactTracerStudy.nama_prodi,
-        FactTracerStudy.tahun_snapshot,
+        DimPerusahaan.label_jenis_perusahaan,
+        DimPerusahaan.label_tingkat_instansi,
+        DimPerusahaan.nama_kota,
+        DimPerusahaan.nama_provinsi,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimWaktu.tahun_snapshot,
       ],
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
