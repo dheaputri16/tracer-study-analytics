@@ -339,10 +339,13 @@ cube(`FactTracerStudy`, {
   // ─────────────────────────────────────────────────────────────
 
   pre_aggregations: {
-
-    // Grafik utama: keterserapan, distribusi status, KPI per prodi.
-    // Include hierarki prodi lengkap untuk support drill-down
-    // dari jenjang → jurusan → prodi tanpa query tambahan.
+ 
+    // ── 1. Pre-agg UTAMA ────────────────────────────────────
+    // Melayani: KPI keterserapan, distribusi status,
+    //           grafik tren per tahun lulus, filter global.
+    // Include tahun_lulus (DimAlumni) DAN tahun_snapshot +
+    // minggu_snapshot (DimWaktu) agar satu pre-agg bisa
+    // melayani semua kombinasi filter global dashboard.
     utama_per_hierarki_prodi_tahun: {
       measures: [
         FactTracerStudy.count_alumni,
@@ -354,24 +357,27 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.count_tidak_sesuai_bidang,
       ],
       dimensions: [
-        // Hierarki prodi — tiga level untuk drill-down.
-        // Reference ke DimProdi langsung (bukan FactTracerStudy.jenjang)
-        // karena Cube.js mensyaratkan dimension didefinisikan
-        // di cube pemiliknya.
+        // Hierarki prodi — drill-down jenjang → jurusan → prodi
         DimProdi.jenjang,
         DimProdi.jurusan,
         DimProdi.nama_prodi,
-        // Status dan waktu
+        // Status alumni untuk distribusi
         DimStatusAlumni.label,
-        DimWaktu.tahun_snapshot,
+        // Filter waktu — keduanya disertakan:
+        DimAlumni.tahun_lulus,      // untuk grafik tren per angkatan
+        DimWaktu.tahun_snapshot,    // untuk konteks snapshot
+        DimWaktu.minggu_snapshot,   // untuk filter global minggu snapshot
       ],
+      scheduledRefresh: false,
       refresh_key: {
+        // Hanya rebuild kalau ETL sudah jalan (tanggal_refresh berubah).
+        // Dicek sekali sehari — cukup untuk ETL mingguan.
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
-        every: `1 hour`,
+        every: `1 day`,
       },
     },
-
-    // Grafik distribusi masa tunggu kerja per prodi dan tahun.
+ 
+    // ── 2. Distribusi masa tunggu kerja ─────────────────────
     distribusi_masa_tunggu: {
       measures: [
         FactTracerStudy.count_tunggu_0_3_bulan,
@@ -385,15 +391,17 @@ cube(`FactTracerStudy`, {
         DimProdi.jenjang,
         DimProdi.jurusan,
         DimProdi.nama_prodi,
-        DimWaktu.tahun_snapshot,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
       ],
+      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
-        every: `1 hour`,
+        every: `1 day`,
       },
     },
-
-    // Grafik distribusi dan rata-rata gaji lulusan.
+ 
+    // ── 3. Distribusi gaji ──────────────────────────────────
     distribusi_gaji: {
       measures: [
         FactTracerStudy.avg_take_home_pay,
@@ -405,15 +413,17 @@ cube(`FactTracerStudy`, {
         DimProdi.jurusan,
         DimProdi.nama_prodi,
         DimStatusAlumni.label,
-        DimWaktu.tahun_snapshot,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
       ],
+      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
-        every: `1 hour`,
+        every: `1 day`,
       },
     },
-
-    // Grafik kesesuaian bidang dan level pendidikan.
+ 
+    // ── 4. Kesesuaian bidang & level ────────────────────────
     distribusi_kesesuaian: {
       measures: [
         FactTracerStudy.count_alumni,
@@ -426,17 +436,19 @@ cube(`FactTracerStudy`, {
         DimProdi.jenjang,
         DimProdi.jurusan,
         DimProdi.nama_prodi,
-        DimWaktu.tahun_snapshot,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
       ],
+      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
-        every: `1 hour`,
+        every: `1 day`,
       },
     },
-
-    // Grafik sebaran instansi dan lokasi kerja alumni.
-    // Label jenis/tingkat/kota/provinsi dari dim_perusahaan
-    // sudah statis (surrogate key join) — bisa di-cache penuh.
+ 
+    // ── 5. Sebaran instansi & lokasi kerja ──────────────────
+    // Menggunakan label langsung (sudah didenormalisasi di
+    // dim_perusahaan) — tidak ada join ke tabel referensi lagi.
     sebaran_instansi_lokasi: {
       measures: [
         FactTracerStudy.count_alumni,
@@ -449,11 +461,40 @@ cube(`FactTracerStudy`, {
         DimProdi.jenjang,
         DimProdi.jurusan,
         DimProdi.nama_prodi,
-        DimWaktu.tahun_snapshot,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
       ],
+      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
-        every: `1 hour`,
+        every: `1 day`,
+      },
+    },
+ 
+    // ── 6. Wirausaha ─────────────────────────────────────────
+    // Menggunakan label langsung dari dim_wirausaha
+    // (setelah migration: nama_provinsi & nama_kota terisi).
+    distribusi_wirausaha: {
+      measures: [
+        FactTracerStudy.count_alumni,
+        FactTracerStudy.avg_masa_tunggu_wirausaha,
+        FactTracerStudy.min_masa_tunggu_wirausaha,
+        FactTracerStudy.max_masa_tunggu_wirausaha,
+      ],
+      dimensions: [
+        DimWirausaha.label_tingkat_instansi,
+        DimWirausaha.nama_provinsi,
+        DimWirausaha.nama_kota,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
+      ],
+      scheduledRefresh: false,
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 day`,
       },
     },
   },
