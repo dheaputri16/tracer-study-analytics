@@ -190,7 +190,7 @@ cube(`FactTracerStudy`, {
     count_terserap: {
       type: `count`,
       filters: [{
-        sql: `${DimStatusAlumni}.status_alumni_sk IN (1, 3)`,
+        sql: `${CUBE}.status_alumni_sk IN (1, 3)`,
       }],
       description: `Alumni terserap: bekerja (sk=1) + wirausaha (sk=3)`,
     },
@@ -199,9 +199,9 @@ cube(`FactTracerStudy`, {
     count_masa_tunggu_cepat: {
       type: `count`,
       filters: [
-        { sql: `${FactTracerStudy}.masa_tunggu_bekerja > 0` },
-        { sql: `${FactTracerStudy}.masa_tunggu_bekerja <= 6` },
-        { sql: `${DimStatusAlumni}.status_alumni_sk IN (1, 3)` },
+        { sql: `${CUBE}.masa_tunggu_bekerja > 0` },
+        { sql: `${CUBE}.masa_tunggu_bekerja <= 6` },
+        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
       ],
       description: `Alumni dapat kerja atau wirausaha dalam 6 bulan (standar DIKTI)`,
     },
@@ -211,26 +211,26 @@ cube(`FactTracerStudy`, {
     count_tunggu_0_3_bulan: {
       type: `count`,
       filters: [
-        { sql: `${FactTracerStudy}.masa_tunggu_bekerja >= 0` },
-        { sql: `${FactTracerStudy}.masa_tunggu_bekerja < 3` },
-        { sql: `${DimStatusAlumni}.status_alumni_sk IN (1, 3)` },
+        { sql: `${CUBE}.masa_tunggu_bekerja >= 0` },
+        { sql: `${CUBE}.masa_tunggu_bekerja < 3` },
+        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
       ],
       description: `Alumni dapat kerja dalam 0-3 bulan`,
     },
     count_tunggu_3_6_bulan: {
       type: `count`,
       filters: [
-        { sql: `${FactTracerStudy}.masa_tunggu_bekerja >= 3` },
-        { sql: `${FactTracerStudy}.masa_tunggu_bekerja <= 6` },
-        { sql: `${DimStatusAlumni}.status_alumni_sk IN (1, 3)` },
+        { sql: `${CUBE}.masa_tunggu_bekerja >= 3` },
+        { sql: `${CUBE}.masa_tunggu_bekerja <= 6` },
+        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
       ],
       description: `Alumni dapat kerja dalam 3-6 bulan`,
     },
     count_tunggu_lebih_6_bulan: {
       type: `count`,
       filters: [
-        { sql: `${FactTracerStudy}.masa_tunggu_bekerja > 6` },
-        { sql: `${DimStatusAlumni}.status_alumni_sk IN (1, 3)` },
+        { sql: `${CUBE}.masa_tunggu_bekerja > 6` },
+        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
       ],
       description: `Alumni dapat kerja lebih dari 6 bulan`,
     },
@@ -243,16 +243,16 @@ cube(`FactTracerStudy`, {
     count_sesuai_bidang: {
       type: `count`,
       filters: [
-        { sql: `${FactTracerStudy}.kesesuaian_bidang_sk IN (1, 2, 3)` },
-        { sql: `${DimStatusAlumni}.status_alumni_sk = 1` },
+        { sql: `${CUBE}.kesesuaian_bidang_sk IN (1, 2, 3)` },
+        { sql: `${CUBE}.status_alumni_sk = 1` },
       ],
       description: `Alumni bekerja sesuai bidang (sk 1-3: Sangat Erat, Erat, Cukup Erat)`,
     },
     count_tidak_sesuai_bidang: {
       type: `count`,
       filters: [
-        { sql: `${FactTracerStudy}.kesesuaian_bidang_sk IN (4, 5)` },
-        { sql: `${DimStatusAlumni}.status_alumni_sk = 1` },
+        { sql: `${CUBE}.kesesuaian_bidang_sk IN (4, 5)` },
+        { sql: `${CUBE}.status_alumni_sk = 1` },
       ],
       description: `Alumni bekerja tidak sesuai bidang (sk 4-5: Kurang Erat, Tidak Sama Sekali)`,
     },
@@ -346,7 +346,8 @@ cube(`FactTracerStudy`, {
     // Include tahun_lulus (DimAlumni) DAN tahun_snapshot +
     // minggu_snapshot (DimWaktu) agar satu pre-agg bisa
     // melayani semua kombinasi filter global dashboard.
-    utama_per_hierarki_prodi_tahun: {
+    utama: {
+      type: `rollup`,
       measures: [
         FactTracerStudy.count_alumni,
         FactTracerStudy.count_terserap,
@@ -368,7 +369,6 @@ cube(`FactTracerStudy`, {
         DimWaktu.tahun_snapshot,    // untuk konteks snapshot
         DimWaktu.minggu_snapshot,   // untuk filter global minggu snapshot
       ],
-      scheduledRefresh: false,
       refresh_key: {
         // Hanya rebuild kalau ETL sudah jalan (tanggal_refresh berubah).
         // Dicek sekali sehari — cukup untuk ETL mingguan.
@@ -394,7 +394,6 @@ cube(`FactTracerStudy`, {
         DimAlumni.tahun_lulus,
         DimWaktu.minggu_snapshot,
       ],
-      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
         every: `1 day`,
@@ -416,7 +415,6 @@ cube(`FactTracerStudy`, {
         DimAlumni.tahun_lulus,
         DimWaktu.minggu_snapshot,
       ],
-      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
         every: `1 day`,
@@ -439,7 +437,6 @@ cube(`FactTracerStudy`, {
         DimAlumni.tahun_lulus,
         DimWaktu.minggu_snapshot,
       ],
-      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
         every: `1 day`,
@@ -464,7 +461,6 @@ cube(`FactTracerStudy`, {
         DimAlumni.tahun_lulus,
         DimWaktu.minggu_snapshot,
       ],
-      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
         every: `1 day`,
@@ -491,7 +487,6 @@ cube(`FactTracerStudy`, {
         DimAlumni.tahun_lulus,
         DimWaktu.minggu_snapshot,
       ],
-      scheduledRefresh: false,
       refresh_key: {
         sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
         every: `1 day`,
