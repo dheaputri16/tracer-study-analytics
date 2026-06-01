@@ -492,5 +492,27 @@ cube(`FactTracerStudy`, {
         every: `1 day`,
       },
     },
+
+    // ── 7. Studi Lanjut ────────────────────────────────────
+    distribusi_studi_lanjut: {
+      type: `rollup`,
+      measures: [
+        FactTracerStudy.count_alumni,
+      ],
+      dimensions: [
+        DimStudiLanjut.perguruan_tinggi,
+        DimStudiLanjut.program_studi,
+        DimStudiLanjut.sumber_biaya,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 day`,
+      },
+    },
   },
 });
