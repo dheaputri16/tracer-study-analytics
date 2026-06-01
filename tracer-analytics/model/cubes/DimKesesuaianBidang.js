@@ -16,17 +16,5 @@ cube(`DimKesesuaianBidang`, {
       type: `string`,
       // Sangat Erat / Erat / Cukup Erat / Kurang Erat / Tidak Sama Sekali
     },
-    valid_from: {
-      sql: `valid_from`,
-      type: `time`,
-    },
-    valid_to: {
-      sql: `valid_to`,
-      type: `time`,
-    },
-    flag_kesesuaian_bidang: {
-      sql: `flag_kesesuaian_bidang`,
-      type: `boolean`,
-    },
   },
 });

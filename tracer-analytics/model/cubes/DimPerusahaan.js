@@ -18,24 +18,6 @@ cube(`DimPerusahaan`, {
       type: `string`,
     },
 
-    // Integer codes — untuk filter numerik jika dibutuhkan
-    jenis_perusahaan: {
-      sql: `jenis_perusahaan`,
-      type: `number`,
-    },
-    tingkat_instansi: {
-      sql: `tingkat_instansi`,
-      type: `number`,
-    },
-    kota: {
-      sql: `kota`,
-      type: `number`,
-    },
-    provinsi: {
-      sql: `provinsi`,
-      type: `number`,
-    },
-
     // Label — ini yang dipakai untuk tampilan di dashboard
     label_jenis_perusahaan: {
       sql: `label_jenis_perusahaan`,
