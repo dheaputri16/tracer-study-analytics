@@ -58,7 +58,7 @@ cube(`FactMultiSelect`, {
   },
 
   pre_aggregations: {
-    multi_select_per_indikator: {
+    per_indikator: {
       type: `rollup`,
       measures: [
         FactMultiSelect.count_pilihan,

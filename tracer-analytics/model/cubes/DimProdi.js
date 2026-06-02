@@ -1,5 +1,5 @@
 cube(`DimProdi`, {
-  sql_table: `public.dim_prodi`,
+  sql: `SELECT * FROM public.dim_prodi WHERE flag_prodi = true`,
 
   // ─────────────────────────────────────────────────────────────
   //  HIERARKI DIMENSI PRODI

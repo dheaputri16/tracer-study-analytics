@@ -1,5 +1,5 @@
 cube(`DimWirausaha`, {
-  sql_table: `public.dim_wirausaha`,
+  sql: `SELECT * FROM public.dim_wirausaha WHERE flag_wirausaha = true`,
 
   dimensions: {
     // ── Surrogate Key ─────────────────────────────────────────
