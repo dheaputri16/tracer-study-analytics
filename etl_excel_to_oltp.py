@@ -32,18 +32,18 @@ DB_CONFIG = {
 }
 
 EXCEL_FILES = [
-    ("data/Data_2019.xlsx", 2022),
-    ("data/Data_2020.xlsx", 2023),
-    ("data/Data_2021.xlsx", 2024),
-    ("data/Data_2022.xlsx", 2025),
-    ("data/Data_2023.xlsx", 2025),
-    ("data/Data_2024.xlsx", 2026),
+    ("data/Data_2019.xlsx", 2019),
+    ("data/Data_2020.xlsx", 2020),
+    ("data/Data_2021.xlsx", 2021),
+    ("data/Data_2022.xlsx", 2022),
+    ("data/Data_2023.xlsx", 2023),
+    ("data/Data_2024.xlsx", 2024),
 ]
 
-RUN_ALL        = False
-TEST_FILE      = "data/Data_2024.xlsx"
-TEST_GRAD_YEAR = 2026
-TEST_MAX_ROWS  = None  # None = semua baris, angka = batas baris (untuk test)
+RUN_ALL = True  # True untuk proses semua file, False untuk testing satu file saja
+# TEST_FILE = "data/Data_2024.xlsx"
+# TEST_GRAD_YEAR = 2024
+# TEST_MAX_ROWS = 50
 
 # ══════════════════════════════════════════════════════════════════
 # SHEET → PROGRAM CODE
