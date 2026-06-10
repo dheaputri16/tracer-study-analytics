@@ -180,6 +180,16 @@ cube(`FactTracerStudy`, {
       sql: `take_home_pay`,
       type: `max`,
     },
+    count_above_ump: {
+      type: `count`,
+      filters: [{ sql: `${CUBE}.flag_above_ump = 1` }],
+      description: `Alumni dengan gaji ≥ 1.2× UMP tahun lulus`,
+    },
+    count_below_ump: {
+      type: `count`,
+      filters: [{ sql: `${CUBE}.flag_above_ump = 0` }],
+      description: `Alumni dengan gaji < 1.2× UMP tahun lulus`,
+    },
 
     // ── HARDCODE — keputusan bisnis institusi ──────────────────
 
@@ -301,6 +311,7 @@ cube(`FactTracerStudy`, {
     perusahaan_sk:        { sql: `perusahaan_sk`,        type: `number` },
     id_studi_lanjut:      { sql: `id_studi_lanjut`,      type: `number` },
     wirausaha_sk:         { sql: `wirausaha_sk`,         type: `number` },
+    ump_sk:               { sql: `ump_sk`,               type: `number` },
 
     // ── Kolom numerik dari fact ─────────────────────────────────
     masa_tunggu_bekerja:   { sql: `masa_tunggu_bekerja`,   type: `number` },
@@ -308,6 +319,7 @@ cube(`FactTracerStudy`, {
     bulan_sesudah_lulus:   { sql: `bulan_sesudah_lulus`,   type: `number` },
     masa_tunggu_wirausaha: { sql: `masa_tunggu_wirausaha`, type: `number` },
     take_home_pay:         { sql: `take_home_pay`,         type: `number` },
+    flag_above_ump:        { sql: `flag_above_ump`,        type: `number` },
   },
 
   // ─────────────────────────────────────────────────────────────
@@ -406,6 +418,8 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.avg_take_home_pay,
         FactTracerStudy.min_take_home_pay,
         FactTracerStudy.max_take_home_pay,
+        FactTracerStudy.count_above_ump,
+        FactTracerStudy.count_below_ump,
       ],
       dimensions: [
         DimProdi.jenjang,
