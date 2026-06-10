@@ -182,13 +182,27 @@ cube(`FactTracerStudy`, {
     },
     count_above_ump: {
       type: `count`,
-      filters: [{ sql: `${CUBE}.flag_above_ump = 1` }],
+      filters: [
+        { sql: `${CUBE}.flag_above_ump = 1` },
+        { sql: `${CUBE}.flag_above_ump IS NOT NULL` }
+      ],
       description: `Alumni dengan gaji ≥ 1.2× UMP tahun lulus`,
     },
     count_below_ump: {
       type: `count`,
-      filters: [{ sql: `${CUBE}.flag_above_ump = 0` }],
+      filters: [
+        { sql: `${CUBE}.flag_above_ump = 0` },
+        { sql: `${CUBE}.flag_above_ump IS NOT NULL` }
+      ],
       description: `Alumni dengan gaji < 1.2× UMP tahun lulus`,
+    },
+    // Alumni yang BISA dibandingkan dengan UMP (ada data gaji + ada UMP ref)
+    count_dengan_data_ump: {
+      type: `count`,
+      filters: [
+        { sql: `${CUBE}.flag_above_ump IS NOT NULL` },
+      ],
+      description: `Alumni yang memiliki data gaji dan referensi UMP valid`,
     },
 
     // ── HARDCODE — keputusan bisnis institusi ──────────────────
@@ -420,6 +434,8 @@ cube(`FactTracerStudy`, {
         FactTracerStudy.max_take_home_pay,
         FactTracerStudy.count_above_ump,
         FactTracerStudy.count_below_ump,
+        FactTracerStudy.count_dengan_data_ump, // (denominator)
+        FactTracerStudy.count_alumni,          // (untuk coverage %)
       ],
       dimensions: [
         DimProdi.jenjang,
