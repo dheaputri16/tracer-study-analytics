@@ -1,18 +1,22 @@
 """
 ============================================================
-SmartTracer ETL v3: Excel Bersih (2019-2024) → PostgreSQL OLTP
+SmartTracer ETL v4: Excel Bersih (2019-2024) → PostgreSQL OLTP
 ============================================================
-PERUBAHAN dari v2:
-  1. employment_status → label PDDIKTI asli
-     ('Bekerja (full time / part time)', 'Wiraswasta', dll)
-  2. programs lookup: WHERE code = 'TKG' (bukan WHERE name = 'TKG')
-     karena programs.code = kode singkat, programs.name = nama panjang
-  3. S2 sheets (Keuangan Syariah, Rekayasa Infrastruktur) = DIPROSES
-  4. Unique constraints: pakai nama yang sudah ada di schema
-     (responses_questionnaire_id_alumni_id_unique, dll)
-  5. ADD CONSTRAINT syntax: pakai DO block, bukan IF NOT EXISTS
-
-JALANKAN persiapan_etl_v3.sql di pgAdmin SEBELUM script ini!
+PERUBAHAN dari v3:
+  1. PRIORITAS UTAMA: response_answers memuat SEMUA jawaban Excel
+     — termasuk kode identitas kementrian (nimhsmsmh, nmmhsmsmh, dll)
+     — termasuk f5a1 dan f5a2 (province id & city id integer, bukan string nama)
+     — semua f-code lainnya ikut masuk
+  2. alumni_profiles juga diupdate kolom email, phone, nik, npwp, kode_pt
+  3. employment_records & education_records → DIKOMENTARI (tidak diisi)
+     Uncomment blok "# DISABLED: employment_records" dan
+     "# DISABLED: education_records" kalau nanti mau diaktifkan lagi
+  4. Mapping header Excel → question_code menggunakan teks deskriptif
+     sesuai form kementrian PDDIKTI
+  5. f5a2 (Kota/Kabupaten) ditambahkan ke mapping
+  6. salary (f505) dipastikan masuk ke response_answers sekaligus
+     ke salary_current di employment_records (kalau DISABLED dibuka)
+============================================================
 """
 
 import os, sys, re, traceback
@@ -40,52 +44,42 @@ EXCEL_FILES = [
     ("data/Data_2024.xlsx", 2024),
 ]
 
-RUN_ALL = True  # True untuk proses semua file, False untuk testing satu file saja
-# TEST_FILE = "data/Data_2024.xlsx"
-# TEST_GRAD_YEAR = 2024
-# TEST_MAX_ROWS = 50
+RUN_ALL = True   # False = testing satu file saja
+# TEST_FILE       = "data/Data_2024.xlsx"
+# TEST_GRAD_YEAR  = 2024
+# TEST_MAX_ROWS   = 50
 
 # ══════════════════════════════════════════════════════════════════
 # SHEET → PROGRAM CODE
 # programs.code = kode singkat (TKG, TKS, dll)
-# programs.name = nama panjang (Teknik Konstruksi Gedung, dll)
 # ══════════════════════════════════════════════════════════════════
 SHEET_TO_PROGRAM_CODE = {
-    # Teknik Sipil & Konstruksi
     "D3 - Teknik Konstruksi Gedung":         "TKG",
     "D3 - Teknik Konstruksi Sipil":          "TKS",
     "D4 - Teknik Perancangan Jalan Dan":     "TPJJ",
     "D4 - Teknik Perancangan Jalan d":       "TPJJ",
     "D4 - Teknik Perawatan Dan Perba":       "TPPG",
-    # Teknik Mesin & Manufaktur
     "D3 - Teknik Mesin":                     "TM",
     "D4 - Teknik Perancangan dan Kon":       "TPKM",
     "D4 - Proses Manufaktur":                "PM",
-    # Teknik Pendingin & Energi
     "D3 - Teknik Pendingin Dan Tata ":       "TPTU3",
     "D4 - Teknik Pendingin dan Tata ":       "TPTU4",
     "D4 - Teknik Pendingin dan Tata":        "TPTU4",
     "D3 - Teknik Konversi Energi":           "TKE3",
     "D4 - Teknik Konservasi Energi":         "TKE4",
     "D4 - Teknologi Pembangkit Tenag":       "TPTL",
-    # Teknik Elektronika & Listrik
     "D3 - Teknik Elektronika":               "TEL3",
     "D4 - Teknik Elektronika":               "TEL4",
     "D3 - Teknik Listrik":                   "TL",
     "D4 - Teknik Otomasi Industri":          "TOI",
-    # Teknik Telekomunikasi
     "D3 - Teknik Telekomunikasi":            "TELKOM3",
     "D4 - Teknik Telekomunikasi":            "TELKOM4",
-    # Teknik Kimia
     "D3 - Teknik Kimia":                     "TK3",
     "D3 - Analis Kimia":                     "AK3",
     "D4 - Teknik Kimia Produksi Bers":       "TKPB",
-    # Teknik Informatika
     "D3 - Teknik Informatika":               "TI3",
     "D4 - Teknik Informatika":               "TI",
-    # Teknik Aeronautika
     "D3 - Teknik Aeronautika":               "TA",
-    # Akuntansi & Keuangan
     "D3 - Akuntansi":                        "AKT3",
     "D4 - Akuntansi":                        "AKT4",
     "D3 - Keuangan Dan Perbankan":           "KP",
@@ -93,25 +87,21 @@ SHEET_TO_PROGRAM_CODE = {
     "D4 - Akuntansi Manajemen Pemeri":       "AMP",
     "D4 - Akuntansi Manajemen Pemerintahan": "AMP",
     "D4 - Manajemen Aset":                   "MA",
-    # Administrasi & Manajemen
     "D3 - Administrasi Bisnis":              "AB3",
     "D4 - Administrasi Bisnis":              "AB4",
     "D3 - Manajemen Pemasaran":              "MP3",
     "D4 - Manajemen Pemasaran":              "MP4",
     "D3 - Usaha Perjalanan Wisata":          "UPW",
     "D3 - Bahasa Inggris":                   "BIG",
-    # S2 — ditambahkan via persiapan_etl_v3.sql
     "S2 - Keuangan dan Perbankan Sya":       "KPS2",
     "S2 - Rekayasa Infrastruktur (Te":       "RIS2",
     "S2 - Keuangan dan Perbankan Syariah":   "KPS2",
     "S2 - Rekayasa Infrastruktur":           "RIS2",
-    # Sheet kosong
     "Sheet1": None,
 }
 
 # ══════════════════════════════════════════════════════════════════
-# STATUS KERJA → label PDDIKTI ASLI
-# (setelah constraint di DB diubah via persiapan_etl_v3.sql)
+# STATUS KERJA → label PDDIKTI
 # ══════════════════════════════════════════════════════════════════
 STATUS_TO_LABEL = {
     1: "Bekerja (full time / part time)",
@@ -119,17 +109,16 @@ STATUS_TO_LABEL = {
     3: "Wiraswasta",
     4: "Melanjutkan Pendidikan",
     5: "Tidak kerja tetapi sedang mencari kerja",
-    6: "Melanjutkan pendidikan sambil bekerja",   # 2022+
-    7: "Melanjutkan pendidikan sambil wiraswasta", # 2022+
+    6: "Melanjutkan pendidikan sambil bekerja",
+    7: "Melanjutkan pendidikan sambil wiraswasta",
 }
 
-# Status yang berarti bekerja (untuk employment_records)
-STATUS_BEKERJA    = {1, 6}  # employed + melanjutkan sambil bekerja
-STATUS_WIRAUSAHA  = {3, 7}  # wiraswasta + melanjutkan sambil wiraswasta
-STATUS_ADA_KERJA  = STATUS_BEKERJA | STATUS_WIRAUSAHA
+STATUS_BEKERJA   = {1, 6}
+STATUS_WIRAUSAHA = {3, 7}
+STATUS_ADA_KERJA = STATUS_BEKERJA | STATUS_WIRAUSAHA
 
 # ══════════════════════════════════════════════════════════════════
-# MAPPING PROVINSI
+# MAPPING PROVINSI (untuk fallback parse_province jika perlu)
 # ══════════════════════════════════════════════════════════════════
 PROVINCE_NAME_TO_CODE = {
     "DKI Jakarta":"10000","Jawa Barat":"20000","Jawa Tengah":"30000",
@@ -147,7 +136,7 @@ PROVINCE_NAME_TO_CODE = {
     "Nusa Tenggara Barat":"230000","Nusa Tenggara Timur":"240000",
     "Maluku":"210000","Maluku Utara":"270000",
     "Papua":"250000","Papua Barat":"320000",
-    "Luar Negeri":"350000","Lainnya":None,
+    "Luar Negeri":"350000",
 }
 PROVINCE_INDEX_TO_CODE = {
     1:"60000",2:"70000",3:"80000",4:"90000",5:"310000",
@@ -159,7 +148,6 @@ PROVINCE_INDEX_TO_CODE = {
     31:"210000",32:"270000",33:"320000",34:"250000",35:"350000",
 }
 
-# Prefix kota Excel → province_code
 CITY_PREFIX_TO_PROV = {
     "jabar":"20000","jawa barat":"20000",
     "dki jakarta":"10000","dki":"10000",
@@ -195,156 +183,306 @@ CITY_PREFIX_TO_PROV = {
 }
 
 # ══════════════════════════════════════════════════════════════════
-# KOLOM EXCEL → f-code
+# LOOKUP TABEL (diisi dari DB saat startup)
+# DB_PROVINCES : code → id   (misal "20000" → 13)
+# DB_CITIES    : province_code → {city_name_lower → (city_id, city_name_asli)}
 # ══════════════════════════════════════════════════════════════════
-COL_KEYWORD_TO_FCODE = {
-    "status Anda saat ini":                                           "f8",
-    "STATUS ANDA SAAT INI":                                           "f8",
-    "Kapan anda mulai mencari pekerjaan":                             "f301",
-    "SEBELUM LULUS, Anda mulai mencari":                              "f302",
-    "SETELAH lulus, Anda mulai mencari":                              "f303",
-    "SETELAH LULUS, Anda mulai mencari":                              "f303",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[1]":    "f401",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[2]":    "f402",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[3]":    "f403",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[4]":    "f404",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[5]":    "f405",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[6]":    "f406",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[7]":    "f407",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[8]":    "f408",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[9]":    "f409",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[10]":   "f410",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[11]":   "f411",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[12]":   "f412",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[13]":   "f413",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[14]":   "f414",
-    "mencari pekerjaan tersebut? Jawaban bisa lebih dari satu[other]":"f415",
-    "sudah Anda lamar (lewat surat":                                  "f6",
-    "yang merespons lamaran":                                         "f7",
-    "yang mengundang Anda untuk wawancara":                           "f7a",
-    "sumberdana dalam pembiayaan kuliah":                             "f1201",
-    "saat LULUS.*?Etika":                                             "f1761",
-    "saat LULUS.*?Keahlian berdasarkan":                              "f1763",
-    "saat LULUS.*?Bahasa Inggris":                                    "f1765",
-    "saat LULUS.*?Penggunaan Teknologi":                              "f1767",
-    "saat LULUS.*?Komunikasi":                                        "f1769",
-    "saat LULUS.*?Kerja sama tim":                                    "f1771",
-    "saat LULUS.*?Pengembangan Diri":                                 "f1773",
-    "saat ini.*?Etika":                                               "f1762",
-    "saat ini.*?Keahlian berdasarkan":                                "f1764",
-    "saat ini.*?Bahasa Inggris":                                      "f1766",
-    "saat ini.*?Penggunaan Teknologi":                                "f1768",
-    "saat ini.*?Komunikasi":                                          "f1770",
-    "saat ini.*?Kerja sama tim":                                      "f1772",
-    "saat ini.*?Pengembangan Diri":                                   "f1774",
-    "penekanan.*?Perkuliahan":                                        "f21",
-    "penekanan.*?Demonstrasi":                                        "f22",
-    "penekanan.*?Proyek":                                             "f23",
-    "penekanan.*?Magang":                                             "f24",
-    "penekanan.*?Praktikum":                                          "f25",
-    "penekanan.*?Kerja Lapangan":                                     "f26",
-    "penekanan.*?Diskusi":                                            "f27",
-    "mendapatkan pekerjaan <= 6 bulan":                               "f5c",
-    "berapa bulan anda mendapatkan pekerjaan ?":                      "f502",
-    "berapa bulan Anda mendapatkan pekerjaan ?":                      "f502",
-    "berapa bulan anda mendapatkan pekerjaan pertama":                "f502",
-    "berapa bulan Anda mendapatkan pekerjaan pertama":                "f502",
-    "pendapatan anda saat ini":                                       "f504",
-    "rata-rata pendapatan anda per bulan":                            "f505",
-    "rata-rata pendapatan (take home pay)":                           "f505",
-    "lokasi tempat Anda bekerja? (Propinsi)":                         "f5a1",
-    "jenis perusahaan/instansi/institusi tempat":                     "f1101",
-    "nama perusahaan/kantor":                                         "f5b",
-    "kelompok/tingkat manakah":                                       "f5d",
-    "tingkat manakah tempat kerja":                                   "f5d",
-    "keterkaitan antara bidang studi":                                "f14",
-    "erat hubungan antara bidang studi":                              "f14",
-    "erat hubungan antara program studi":                             "f14",
-    "paling tepat/sesuai untuk pekerjaan":                            "f15",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[1]":     "f1601",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[2]":     "f1602",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[3]":     "f1603",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[4]":     "f1604",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[5]":     "f1605",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[6]":     "f1606",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[7]":     "f1607",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[8]":     "f1608",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[9]":     "f1609",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[10]":    "f1610",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[11]":    "f1611",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[12]":    "f1612",
-    "mengapa anda mengambilnya? Jawaban bisa lebih dari satu[other]": "f1613",
-    "aktif mencari pekerjaan dalam 4 minggu":                         "f1001",
-    "sumber beasiswa studi lanjutan":                                 "f18a_source",
-    "Nama Pergururan Tinggi tempat anda melanjutkan":                 "f18b",
-    "Jenis Program Studi":                                            "f18c",
-    "Tanggal Masuk Studi":                                            "f18d",
-    "jumlah sertifikasi kompetensi":                                  "f_sertif",
-}
+DB_PROVINCES = {}   # province_code → province_id (integer, untuk answer_text)
+DB_CITIES    = {}   # province_code → {name_lower → (city_id, city_name_asli)}
 
-# ══════════════════════════════════════════════════════════════════
-# CITY LOOKUP (diisi saat startup dari DB)
-# ══════════════════════════════════════════════════════════════════
-# DB_CITIES: province_code → {city_name_lower: (city_id, city_name_original)}
-DB_CITIES = {}
-
-def load_cities(cur):
-    # Ambil id sekalian supaya bisa langsung insert sebagai FK
+def load_geo(cur):
+    cur.execute("SELECT id, code FROM tracer_oltp.provinces")
+    for pid, pcode in cur.fetchall():
+        DB_PROVINCES[pcode] = pid
     cur.execute("SELECT id, province_code, name FROM tracer_oltp.cities")
     for cid, pcode, cname in cur.fetchall():
         DB_CITIES.setdefault(pcode, {})[cname.lower()] = (cid, cname)
-    total = sum(len(v) for v in DB_CITIES.values())
-    print(f"  Loaded {total} kota dari DB")
+    print(f"  Loaded {len(DB_PROVINCES)} provinsi, "
+          f"{sum(len(v) for v in DB_CITIES.values())} kota dari DB")
 
-def parse_city(raw):
+# ══════════════════════════════════════════════════════════════════
+# MAPPING KOLOM EXCEL → question_code
+# Key = substring / regex yang dicari di header Excel (case-insensitive)
+# Value = question_code yang akan masuk ke response_answers.question_code
+#
+# IDENTITAS KEMENTRIAN (bagian atas form)
+# Header Excel = teks deskriptif form kementrian
+# ══════════════════════════════════════════════════════════════════
+COL_KEYWORD_TO_FCODE = {
+    # ── Identitas kementrian ─────────────────────────────────────
+    r"Kode PT":                                   "kdptimsmh",
+    r"Tahun Lulus":                               "tahun_lulus",
+    r"Kode Prodi":                                "kdpstmsmh",
+    r"Nomor Telepon":                             "telpomsmh",
+    r"Alamat Email":                              "emailmsmh",
+    r"\bNIK\b":                                   "nik",
+    r"\bNPWP\b":                                  "npwp",
+
+    # ── Status & pekerjaan ───────────────────────────────────────
+    r"status Anda saat ini":                      "f8",
+    r"STATUS ANDA SAAT INI":                      "f8",
+
+    r"berapa bulan.*mendapatkan pekerjaan pertama": "f502",
+    r"berapa bulan.*mendapatkan pekerjaan \?":     "f502",
+    r"berapa bulan.*memulai wiraswasta":           "f502",
+    r"mendapatkan pekerjaan <= 6 bulan":           "f502",
+
+    r"rata-rata pendapatan.*per bulan":            "f505",
+    r"rata-rata pendapatan.*take home":            "f505",
+    r"pendapatan anda saat ini":                   "f505",
+
+    # Lokasi kerja — PROVINSI → answer_text = id provinsi (integer)
+    r"lokasi.*bekerja.*Provinsi":                  "f5a1",
+    r"lokasi.*bekerja.*Propinsi":                  "f5a1",
+    r"Propinsi.*bekerja":                          "f5a1",
+
+    # Lokasi kerja — KOTA/KABUPATEN → answer_text = id kota (integer)
+    r"lokasi.*bekerja.*Kota":                      "f5a2",
+    r"lokasi.*bekerja.*Kabupaten":                 "f5a2",
+    r"Kabupaten.*Kota.*bekerja":                   "f5a2",
+    r"Kota.*Kabupaten.*bekerja":                   "f5a2",
+
+    r"jenis perusahaan.*instansi.*institusi.*tempat": "f1101",
+    r"jenis perusahaan.*instansi lainnya":          "f1102",
+    r"nama perusahaan.*kantor":                     "f5b",
+    r"posisi.*jabatan.*wiraswasta":                 "f5c",
+    r"tingkat.*tempat kerja":                       "f5d",
+    r"kelompok.*tingkat.*tempat kerja":             "f5d",
+
+    # ── Studi lanjut ─────────────────────────────────────────────
+    r"sumber.*biaya.*studi lanjut":                 "f18a",
+    r"sumber beasiswa studi lanjut":                "f18a",
+    r"Perguruan Tinggi.*studi lanjut":              "f18b",
+    r"Nama Perguruan Tinggi.*melanjutkan":          "f18b",
+    r"Program Studi.*studi lanjut":                 "f18c",
+    r"Jenis Program Studi":                         "f18c",
+    r"Tanggal Masuk.*studi":                        "f18d",
+
+    # ── Sumber dana kuliah ───────────────────────────────────────
+    r"sumberdana.*pembiayaan kuliah":               "f1201",
+    r"sumber dana.*pembiayaan kuliah":              "f1201",
+    r"sumber dana pembiayaan.*lainnya":             "f1202",
+
+    # ── Relevansi & kecocokan pendidikan ─────────────────────────
+    r"erat.*hubungan.*bidang studi":                "f14",
+    r"keterkaitan.*bidang studi":                   "f14",
+    r"paling tepat.*sesuai.*pekerjaan":             "f15",
+
+    # ── Kompetensi saat lulus (A) ─────────────────────────────────
+    r"saat LULUS.*Etika":                           "f1761",
+    r"saat LULUS.*Keahlian berdasarkan":            "f1763",
+    r"saat LULUS.*Bahasa Inggris":                  "f1765",
+    r"saat LULUS.*Penggunaan Teknologi":            "f1767",
+    r"saat LULUS.*Komunikasi":                      "f1769",
+    r"saat LULUS.*Kerja sama tim":                  "f1771",
+    r"saat LULUS.*Pengembangan":                    "f1773",
+
+    # ── Kompetensi saat ini / di pekerjaan (B) ───────────────────
+    r"saat ini.*Etika":                             "f1762",
+    r"saat ini.*Keahlian berdasarkan":              "f1764",
+    r"saat ini.*Bahasa Inggris":                    "f1766",
+    r"saat ini.*Penggunaan Teknologi":              "f1768",
+    r"saat ini.*Komunikasi":                        "f1770",
+    r"saat ini.*Kerja sama tim":                    "f1772",
+    r"saat ini.*Pengembangan":                      "f1774",
+
+    # ── Metode pembelajaran ──────────────────────────────────────
+    # Metode pembelajaran — fcode mengacu ke questionnaire_questions (kementrian)
+    # Keyword disesuaikan ke header Excel POLBAN yang asli
+    # Excel pakai format: "...penekanan...[Nama Metode]"
+    #
+    # Yang ADA di Excel → di-map ke fcode kementrian terdekat:
+    r"penekanan.*\[Perkuliahan dalam Prodi\]":   "f21",  # Perkuliahan
+    r"penekanan.*\[Magang\]":                    "f24",  # Magang
+    r"penekanan.*\[Praktikum":                   "f25",  # Praktikum
+    # Fallback format lama (file 2019-2021 mungkin pakai format tanpa bracket)
+    # Pakai negative lookahead supaya [Perkuliahan di luar Prodi] tidak ikut match
+    r"penekanan.*Perkuliahan(?!.*luar)":     "f21",
+    r"penekanan.*Magang":                    "f24",
+    r"penekanan.*Praktikum":                 "f25",
+    r"penekanan.*Kerja Lapangan":            "f26",
+    r"penekanan.*Diskusi":                   "f27",
+    r"penekanan.*Demonstrasi":               "f22",
+    r"penekanan.*Partisipasi":               "f23",
+    r"penekanan.*[Pp]royek [Rr]iset":            "f23",
+    # f22 (Demonstrasi), f23 (Partisipasi proyek riset), f26 (Kerja Lapangan),
+    # f27 (Diskusi) → tidak ada padanan di Excel POLBAN, jadi memang tidak terisi.
+    # Ini wajar — fcode tetap sesuai kementrian, datanya NULL untuk kolom tsb.
+
+    # ── Kapan mulai mencari kerja ────────────────────────────────
+    r"Kapan.*mulai mencari pekerjaan":              "f301",
+    r"berapa bulan.*sebelum lulus.*mencari":        "f302",
+    r"berapa bulan.*sesudah lulus.*mencari":        "f303",
+    r"SEBELUM LULUS.*mencari":                      "f302",
+    r"SETELAH [Ll]ulus.*mencari":                   "f303",
+
+    # ── Cara mencari kerja (f401-f415, boolean 0/1) ──────────────
+    r"mencari pekerjaan.*\[1\]":                    "f401",
+    r"mencari pekerjaan.*\[2\]":                    "f402",
+    r"mencari pekerjaan.*\[3\]":                    "f403",
+    r"mencari pekerjaan.*\[4\]":                    "f404",
+    r"mencari pekerjaan.*\[5\]":                    "f405",
+    r"mencari pekerjaan.*\[6\]":                    "f406",
+    r"mencari pekerjaan.*\[7\]":                    "f407",
+    r"mencari pekerjaan.*\[8\]":                    "f408",
+    r"mencari pekerjaan.*\[9\]":                    "f409",
+    r"mencari pekerjaan.*\[10\]":                   "f410",
+    r"mencari pekerjaan.*\[11\]":                   "f411",
+    r"mencari pekerjaan.*\[12\]":                   "f412",
+    r"mencari pekerjaan.*\[13\]":                   "f413",
+    r"mencari pekerjaan.*\[14\]":                   "f414",
+    r"mencari pekerjaan.*\[other\]":                "f415",
+    r"cara lainnya.*mencari pekerjaan":             "f416",
+
+    # ── Jumlah lamaran ───────────────────────────────────────────
+    r"sudah Anda lamar.*surat.*e-mail":             "f6",
+    r"sudah anda lamar.*surat":                     "f6",
+    r"yang merespons lamaran":                      "f7",
+    r"yang mengundang.*wawancara":                  "f7a",
+
+    # ── Aktif mencari kerja 4 minggu ─────────────────────────────
+    r"aktif mencari pekerjaan.*4 minggu":           "f1001",
+    r"aktivitas lainnya.*mencari pekerjaan":        "f1002",
+
+    # ── Alasan ketidaksesuaian (f1601-f1613, boolean) ────────────
+    r"mengapa.*mengambilnya.*\[1\]":                "f1601",
+    r"mengapa.*mengambilnya.*\[2\]":                "f1602",
+    r"mengapa.*mengambilnya.*\[3\]":                "f1603",
+    r"mengapa.*mengambilnya.*\[4\]":                "f1604",
+    r"mengapa.*mengambilnya.*\[5\]":                "f1605",
+    r"mengapa.*mengambilnya.*\[6\]":                "f1606",
+    r"mengapa.*mengambilnya.*\[7\]":                "f1607",
+    r"mengapa.*mengambilnya.*\[8\]":                "f1608",
+    r"mengapa.*mengambilnya.*\[9\]":                "f1609",
+    r"mengapa.*mengambilnya.*\[10\]":               "f1610",
+    r"mengapa.*mengambilnya.*\[11\]":               "f1611",
+    r"mengapa.*mengambilnya.*\[12\]":               "f1612",
+    r"mengapa.*mengambilnya.*\[other\]":            "f1613",
+    r"alasan lainnya.*tidak sesuai":                "f1614",
+
+    # ── Misc ─────────────────────────────────────────────────────
+    r"jumlah sertifikasi":                          "f_sertif",
+}
+
+# question_code yang berisi nilai provinsi (perlu di-resolve ke province_id)
+FCODE_PROVINCE = {"f5a1"}
+# question_code yang berisi nilai kota (perlu di-resolve ke city_id)
+FCODE_CITY     = {"f5a2"}
+
+# question_code yang merupakan identitas alumni (disimpan juga ke alumni_profiles)
+FCODE_IDENTITY = {
+    "nimhsmsmh", "kdptimsmh", "tahun_lulus", "kdpstmsmh",
+    "nmmhsmsmh", "telpomsmh", "emailmsmh", "nik", "npwp",
+}
+
+# ══════════════════════════════════════════════════════════════════
+# GEO HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+def resolve_province_id(raw):
     """
-    Input  : 'Jabar - Kota Bandung'
-    Output : (province_code, city_name, city_id)
-             ('20000', 'Kota Bandung', 42)
-
-    Kalau nama kota tidak match ke DB cities:
-             ('20000', 'Kota Bandung', None)
-             → work_city terisi string, work_city_id = NULL
-
-    Kalau prefix provinsi tidak dikenal:
-             (None, 'Kota Bandung', None)
+    Input raw dari Excel (bisa: angka index, kode string "20000", nama "Jawa Barat",
+    atau format "Prefix - Kota" yang digunakan untuk kolom f5a1 di beberapa tahun).
+    Return: province_id (integer) sebagai string, atau None kalau tidak ketemu.
     """
-    if not raw or str(raw).strip() in ('', 'nan', 'None', '-'):
-        return None, None, None
+    if raw is None: return None
     s = str(raw).strip()
+    if s in ('', 'nan', 'None', '-'): return None
+
+    # Coba angka langsung → index
+    try:
+        n = int(float(s))
+        if 1 <= n <= 40:
+            pcode = PROVINCE_INDEX_TO_CODE.get(n)
+            return str(DB_PROVINCES[pcode]) if pcode and pcode in DB_PROVINCES else None
+        # Bisa jadi sudah berupa code langsung (misal 20000)
+        s_code = str(n)
+        if s_code in DB_PROVINCES:
+            return str(DB_PROVINCES[s_code])
+    except ValueError:
+        pass
+
+    # Coba nama provinsi
+    pcode = PROVINCE_NAME_TO_CODE.get(s)
+    if pcode and pcode in DB_PROVINCES:
+        return str(DB_PROVINCES[pcode])
+
+    # Coba format "Prefix - ..." (kolom provinsi kadang format ini)
     parts = re.split(r'\s*[-–]\s*', s, maxsplit=1)
-    if len(parts) != 2:
-        return None, s, None
+    if len(parts) == 2:
+        prefix_pcode = CITY_PREFIX_TO_PROV.get(parts[0].strip().lower())
+        if prefix_pcode and prefix_pcode in DB_PROVINCES:
+            return str(DB_PROVINCES[prefix_pcode])
 
-    prefix = parts[0].strip().lower()
-    city_part = parts[1].strip()
-    pcode = CITY_PREFIX_TO_PROV.get(prefix)
+    return None
+
+
+def resolve_city_id(raw, province_id_str):
+    """
+    Input raw dari Excel — format "Prefix - Nama Kota" atau nama kota saja.
+    province_id_str = hasil resolve_province_id (sudah integer sebagai string).
+    Return: city_id (integer) sebagai string, atau None.
+    """
+    if raw is None: return None
+    s = str(raw).strip()
+    if s in ('', 'nan', 'None', '-'): return None
+
+    # Cari province_code dari province_id
+    pcode = None
+    if province_id_str:
+        try:
+            pid_int = int(province_id_str)
+            for pc, pid in DB_PROVINCES.items():
+                if pid == pid_int:
+                    pcode = pc
+                    break
+        except: pass
+
+    # Ekstrak nama kota dari format "Prefix - Nama Kota"
+    parts = re.split(r'\s*[-–]\s*', s, maxsplit=1)
+    city_part = parts[1].strip() if len(parts) == 2 else s.strip()
+
+    # Kalau belum ada pcode, coba dari prefix
+    if not pcode and len(parts) == 2:
+        prefix_pcode = CITY_PREFIX_TO_PROV.get(parts[0].strip().lower())
+        if prefix_pcode:
+            pcode = prefix_pcode
+
     if not pcode:
-        return None, city_part, None
-
-    # Normalisasi nama Excel → format di tabel cities
-    city_norm = re.sub(r'^kota\s+administrasi\s+', 'Kota ', city_part, flags=re.I)
-    city_norm = re.sub(r'^kabupaten\s+', 'Kab. ', city_norm, flags=re.I)
+        return None
 
     prov_cities = DB_CITIES.get(pcode, {})
 
-    # 1. Direct match (case-insensitive)
+    # Normalisasi
+    city_norm = re.sub(r'^kota\s+administrasi\s+', 'Kota ', city_part, flags=re.I)
+    city_norm = re.sub(r'^kabupaten\s+', 'Kab. ', city_norm, flags=re.I)
+
+    # Direct match
     entry = prov_cities.get(city_norm.lower())
     if entry:
-        return pcode, entry[1], entry[0]
+        return str(entry[0])
 
-    # 2. Fuzzy: strip prefix Kota/Kab. dari kedua sisi
+    # Fuzzy: strip Kota/Kab prefix
     clean = re.sub(r'^(kab\.\s*|kota\s*)', '', city_norm.lower()).strip()
-    for dbl, (dbi, dbn) in prov_cities.items():
+    for dbl, (dbi, _) in prov_cities.items():
         clean_db = re.sub(r'^(kab\.\s*|kota\s*)', '', dbl).strip()
         if clean == clean_db:
-            return pcode, dbn, dbi
+            return str(dbi)
 
-    # 3. Tidak match ke DB → simpan string apa adanya, city_id = None
-    return pcode, city_part, None
+    return None
+
+
+def parse_province_fallback(v):
+    """Fallback sederhana untuk detect province_code dari raw value."""
+    if v is None: return None
+    try:
+        n = int(float(str(v).strip()))
+        return PROVINCE_INDEX_TO_CODE.get(n) if n <= 40 else None
+    except: pass
+    return PROVINCE_NAME_TO_CODE.get(str(v).strip())
 
 # ══════════════════════════════════════════════════════════════════
-# HELPERS
+# HELPERS UMUM
 # ══════════════════════════════════════════════════════════════════
 
 def is_null(v):
@@ -358,31 +496,25 @@ def clean_nim(v):
     return s.split('.')[0] if '.' in s else s
 
 def clean_salary(v):
+    """Parse salary dari berbagai format Excel → float atau None."""
     if v is None: return None
     s = re.sub(r'[Rr][Pp]\.?\s*', '', str(v).strip())
     if s in ('', 'nan', 'None', '0', '-'): return None
-    if s.count('.') > 1: s = s.replace('.', '')
-    elif s.count('.') == 1 and len(s.split('.')[1]) == 3: s = s.replace('.', '')
+    # Titik ribuan: "1.500.000" → "1500000"
+    if s.count('.') > 1:
+        s = s.replace('.', '')
+    elif s.count('.') == 1 and len(s.split('.')[1]) == 3:
+        s = s.replace('.', '')
     s = s.replace(',', '.')
     try:
         n = float(s)
         if n <= 0: return None
+        # Angka kecil (<= 100) kemungkinan dalam juta
         return n * 1_000_000 if 0 < n <= 100 else n
-    except: return None
-
-def parse_province(v):
-    if v is None: return None
-    try:
-        n = int(float(str(v).strip()))
-        return None if n > 40 else PROVINCE_INDEX_TO_CODE.get(n)
-    except: pass
-    return PROVINCE_NAME_TO_CODE.get(str(v).strip())
+    except:
+        return None
 
 def get_program_id(sheet_name, cur):
-    """
-    Lookup programs.id berdasarkan code (kode singkat).
-    programs.code = 'TKG', programs.name = 'Teknik Konstruksi Gedung'
-    """
     code = SHEET_TO_PROGRAM_CODE.get(sheet_name)
     if code is None:
         for key, val in SHEET_TO_PROGRAM_CODE.items():
@@ -395,12 +527,12 @@ def get_program_id(sheet_name, cur):
     row = cur.fetchone()
     return row[0] if row else None
 
-def get_questionnaire_id(program_id, grad_year, cur):
+def get_questionnaire_id(grad_year, cur):
     """
-    Questionnaire slots di DB:
-      program_id=1 → lulusan 2019-2022
-      program_id=2 → lulusan 2023-2025
-      program_id=3 → lulusan 2026+
+    Slot kuesioner:
+      slot 1 → lulusan <= 2022
+      slot 2 → lulusan 2023-2025
+      slot 3 → lulusan >= 2026
     """
     slot = 1 if grad_year <= 2022 else (2 if grad_year <= 2025 else 3)
     cur.execute(
@@ -409,25 +541,32 @@ def get_questionnaire_id(program_id, grad_year, cur):
     )
     row = cur.fetchone()
     if row: return row[0]
-    cur.execute("SELECT id FROM tracer_oltp.questionnaires WHERE program_id = %s LIMIT 1", (slot,))
+    cur.execute(
+        "SELECT id FROM tracer_oltp.questionnaires WHERE program_id = %s LIMIT 1",
+        (slot,)
+    )
     row = cur.fetchone()
     return row[0] if row else 1
 
 def build_col_map(headers):
+    """
+    Scan headers Excel, cocokkan ke COL_KEYWORD_TO_FCODE.
+    Return dict: fcode → [col_index, ...]
+    Satu fcode bisa punya banyak kolom (misal f401-f415 tiap satu kolom).
+    """
     col_map = {}
     for ci, h in enumerate(headers):
         if not h: continue
         hs = str(h)
         for kw, fc in COL_KEYWORD_TO_FCODE.items():
-            try: matched = bool(re.search(kw, hs, re.I | re.DOTALL))
-            except: matched = kw.lower() in hs.lower()
+            try:
+                matched = bool(re.search(kw, hs, re.I | re.DOTALL))
+            except:
+                matched = kw.lower() in hs.lower()
             if matched:
                 col_map.setdefault(fc, []).append(ci)
+                break   # satu kolom → satu fcode, stop di match pertama
     return col_map
-
-def find_city_cols(headers):
-    return [i for i, h in enumerate(headers)
-            if h and "Kabupaten/Kota" in str(h) and "bekerja" in str(h).lower()]
 
 def get_cell(row, indices):
     for ci in (indices or []):
@@ -436,199 +575,298 @@ def get_cell(row, indices):
     return None
 
 # ══════════════════════════════════════════════════════════════════
+# INSERT response_answers — satu baris per (response_id, question_code, answer_index)
+# ══════════════════════════════════════════════════════════════════
+
+def upsert_answer(cur, rid, question_code, answer_text, answer_index=0):
+    """Insert atau update satu jawaban ke response_answers."""
+    if answer_text is None:
+        return
+    val = str(answer_text).strip()
+    if val in ('', 'nan', 'None'):
+        return
+    cur.execute("""
+        INSERT INTO tracer_oltp.response_answers
+            (response_id, question_code, answer_index, answer_text, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, NOW(), NOW())
+        ON CONFLICT (response_id, question_code, answer_index) DO UPDATE SET
+            answer_text = EXCLUDED.answer_text,
+            updated_at  = NOW()
+    """, (rid, question_code, answer_index, val))
+
+# ══════════════════════════════════════════════════════════════════
 # ETL UTAMA
 # ══════════════════════════════════════════════════════════════════
 
 def process_file(filepath, grad_year, conn, max_rows=None):
     cur = conn.cursor()
-    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
-    ok = err = 0
+    wb  = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    ok  = err = 0
 
     for sname in wb.sheetnames:
-        if sname == "Sheet1": continue
+        if sname == "Sheet1":
+            continue
 
         pid = get_program_id(sname, cur)
         if pid is None:
             print(f"  [SKIP] {sname}")
             continue
 
-        qid = get_questionnaire_id(pid, grad_year, cur)
-        ws = wb[sname]
-        it = ws.iter_rows(values_only=True)
-        headers = list(next(it))
+        qid = get_questionnaire_id(grad_year, cur)
+        ws  = wb[sname]
+        it  = ws.iter_rows(values_only=True)
+        headers  = list(next(it))
         col_map  = build_col_map(headers)
-        city_cols = find_city_cols(headers)
         s_ok = s_err = 0
+        n_detected = len(col_map)
+        print(f"  Processing: {sname} ({n_detected} kolom terdeteksi) ...")
 
         for rnum, row in enumerate(it, 2):
-            if max_rows and rnum > max_rows + 1: break
-            if is_null(row[0] if row else None) or is_null(row[1] if len(row) > 1 else None):
+            if max_rows and rnum > max_rows + 1:
+                break
+
+            # Kolom 0 = Nama, kolom 1 = NIM
+            if not row or is_null(row[0] if row else None) or is_null(row[1] if len(row) > 1 else None):
                 continue
 
             nama = str(row[0]).strip()
             nim  = clean_nim(row[1])
-            if not nim: continue
+            if not nim:
+                continue
 
             try:
-                # 1. alumni_profiles
+                # ── 1. alumni_profiles ────────────────────────────────────
+                # Ambil field tambahan kalau ada di col_map
+                email_raw = get_cell(row, col_map.get("emailmsmh", []))
+                phone_raw = get_cell(row, col_map.get("telpomsmh", []))
+                nik_raw   = get_cell(row, col_map.get("nik", []))
+                npwp_raw  = get_cell(row, col_map.get("npwp", []))
+                kdpt_raw  = get_cell(row, col_map.get("kdptimsmh", []))
+
+                email = str(email_raw).strip() if not is_null(email_raw) else None
+                phone = str(phone_raw).strip() if not is_null(phone_raw) else None
+                nik   = str(nik_raw).strip()   if not is_null(nik_raw)   else None
+                npwp  = str(npwp_raw).strip()  if not is_null(npwp_raw)  else None
+                kode_pt = str(kdpt_raw).strip() if not is_null(kdpt_raw) else None
+
                 cur.execute("""
                     INSERT INTO tracer_oltp.alumni_profiles
-                        (nim, name, program_id, graduation_year, is_active, created_at, updated_at)
-                    VALUES (%s,%s,%s,%s,true,NOW(),NOW())
+                        (nim, name, email, phone, program_id, graduation_year,
+                         nik, npwp, kode_pt, is_active, created_at, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,true,NOW(),NOW())
                     ON CONFLICT (nim) DO UPDATE SET
-                        name=EXCLUDED.name, graduation_year=EXCLUDED.graduation_year, updated_at=NOW()
+                        name            = EXCLUDED.name,
+                        email           = COALESCE(EXCLUDED.email, tracer_oltp.alumni_profiles.email),
+                        phone           = COALESCE(EXCLUDED.phone, tracer_oltp.alumni_profiles.phone),
+                        nik             = COALESCE(EXCLUDED.nik,   tracer_oltp.alumni_profiles.nik),
+                        npwp            = COALESCE(EXCLUDED.npwp,  tracer_oltp.alumni_profiles.npwp),
+                        kode_pt         = COALESCE(EXCLUDED.kode_pt, tracer_oltp.alumni_profiles.kode_pt),
+                        graduation_year = EXCLUDED.graduation_year,
+                        updated_at      = NOW()
                     RETURNING id
-                """, (nim, nama, pid, grad_year))
+                """, (nim, nama, email, phone, pid, grad_year, nik, npwp, kode_pt))
                 aid = cur.fetchone()[0]
 
-                # 2. responses
+                # ── 2. responses ──────────────────────────────────────────
                 cur.execute("""
                     INSERT INTO tracer_oltp.responses
-                        (questionnaire_id, alumni_id, submitted_at, created_at, updated_at)
-                    VALUES (%s,%s,NOW(),NOW(),NOW())
-                    ON CONFLICT (questionnaire_id, alumni_id) DO UPDATE SET updated_at=NOW()
+                        (questionnaire_id, alumni_id, status, submitted_at, source, created_at, updated_at)
+                    VALUES (%s,%s,'submitted',NOW(),'etl',NOW(),NOW())
+                    ON CONFLICT (questionnaire_id, alumni_id) DO UPDATE SET
+                        updated_at = NOW()
                     RETURNING id
                 """, (qid, aid))
                 rid = cur.fetchone()[0]
 
-                # 3. response_answers (EAV)
-                seen = set()
-                for fc, cols in col_map.items():
-                    for ci in cols:
-                        if ci >= len(row) or is_null(row[ci]): continue
-                        idx = 0
-                        while (fc, idx) in seen: idx += 1
-                        seen.add((fc, idx))
-                        cur.execute("""
-                            INSERT INTO tracer_oltp.response_answers
-                                (response_id, question_code, answer_index, answer_text, created_at, updated_at)
-                            VALUES (%s,%s,%s,%s,NOW(),NOW())
-                            ON CONFLICT (response_id, question_code, answer_index) DO UPDATE SET
-                                answer_text=EXCLUDED.answer_text, updated_at=NOW()
-                        """, (rid, fc, idx, str(row[ci]).strip()))
+                # ── 3. response_answers — SEMUA kolom Excel ───────────────
+                #
+                # Iterasi SEMUA fcode yang terdeteksi di col_map.
+                # Khusus f5a1 → resolve ke province_id
+                # Khusus f5a2 → resolve ke city_id
+                # Boolean (f401-f415, f1601-f1613) → tiap kolom = answer_index unik
+                # Fcode yang muncul > 1 kolom (rare) → answer_index berbeda
 
-                # 4. employment_records
-                status_raw = get_cell(row, col_map.get("f8", []))
-                if not is_null(status_raw):
-                    try: si = int(float(str(status_raw).strip()))
-                    except: si = None
-                    label = STATUS_TO_LABEL.get(si) if si else None
+                # Identitas wajib dari kolom 0 & 1 (Nama, NIM) selalu di-insert
+                # langsung — tidak lewat col_map supaya tidak pernah terlewat.
+                upsert_answer(cur, rid, "nmmhsmsmh", nama, 0)
+                upsert_answer(cur, rid, "nimhsmsmh", nim,  0)
 
-                    if label:
-                        salary=waiting=company=city_name=city_id=prov_code=is_rel=None
+                # Simpan province_id_str dulu (dibutuhkan saat resolve city)
+                province_id_str = None
 
-                        if si in STATUS_ADA_KERJA:
-                            salary = clean_salary(get_cell(row, col_map.get("f505",[])))
-                            br = get_cell(row, col_map.get("f502",[]))
-                            if not is_null(br):
-                                try:
-                                    w = float(str(br).strip())
-                                    waiting = w if 0 <= w <= 60 else None
-                                except: pass
-                            cr = get_cell(row, col_map.get("f5b",[]))
-                            company = str(cr).strip() if not is_null(cr) else None
+                for fc, col_indices in col_map.items():
+                    # nimhsmsmh & nmmhsmsmh sudah di-insert hardcode dari row[0]/row[1]
+                    # Skip supaya tidak false-match atau double-insert
+                    if fc in ("nimhsmsmh", "nmmhsmsmh"):
+                        continue
+                    for idx, ci in enumerate(col_indices):
+                        if ci >= len(row):
+                            continue
+                        raw = row[ci]
+                        if is_null(raw):
+                            continue
 
-                            # Kota: parse format 'Prefix - Kota'
-                            # parse_city() → (province_code, city_name, city_id)
-                            for ci in city_cols:
-                                if ci < len(row) and not is_null(row[ci]):
-                                    prov_code, city_name, city_id = parse_city(row[ci])
-                                    break
-                            # Fallback provinsi dari kolom f5a1 (kalau city col kosong)
-                            if not prov_code:
-                                prov_code = parse_province(get_cell(row, col_map.get("f5a1",[])))
+                        # Resolve provinsi → ID integer
+                        if fc in FCODE_PROVINCE:
+                            resolved = resolve_province_id(raw)
+                            if resolved:
+                                province_id_str = resolved
+                            answer_val = resolved or str(raw).strip()
+                            upsert_answer(cur, rid, fc, answer_val, idx)
 
-                            f14 = get_cell(row, col_map.get("f14",[]))
-                            if not is_null(f14):
-                                try: is_rel = int(float(str(f14).strip())) in (1,2)
-                                except: pass
+                        # Resolve kota → ID integer
+                        elif fc in FCODE_CITY:
+                            resolved = resolve_city_id(raw, province_id_str)
+                            answer_val = resolved or str(raw).strip()
+                            upsert_answer(cur, rid, fc, answer_val, idx)
 
-                        cur.execute("""
-                            INSERT INTO tracer_oltp.employment_records
-                                (alumni_id, questionnaire_id, employment_status,
-                                 waiting_months, salary_current, company_name,
-                                 work_city, work_city_id, work_province_code,
-                                 is_job_relevant, created_at, updated_at)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
-                            ON CONFLICT (alumni_id, questionnaire_id) DO UPDATE SET
-                                employment_status=EXCLUDED.employment_status,
-                                waiting_months=EXCLUDED.waiting_months,
-                                salary_current=EXCLUDED.salary_current,
-                                company_name=EXCLUDED.company_name,
-                                work_city=EXCLUDED.work_city,
-                                work_city_id=EXCLUDED.work_city_id,
-                                work_province_code=EXCLUDED.work_province_code,
-                                is_job_relevant=EXCLUDED.is_job_relevant,
-                                updated_at=NOW()
-                        """, (aid,qid,label,waiting,salary,company,city_name,city_id,prov_code,is_rel))
+                        # Salary: simpan angka yang sudah dibersihkan
+                        elif fc == "f505":
+                            salary_clean = clean_salary(raw)
+                            answer_val = str(int(salary_clean)) if salary_clean else str(raw).strip()
+                            upsert_answer(cur, rid, fc, answer_val, idx)
 
-                # 5. education_records
-                univ = get_cell(row, col_map.get("f18b",[]))
-                if not is_null(univ):
-                    prodi = get_cell(row, col_map.get("f18c",[]))
-                    tgl   = get_cell(row, col_map.get("f18d",[]))
-                    major = str(prodi).strip() if not is_null(prodi) else None
-                    deg = "Other"
-                    if major:
-                        ml = major.lower()
-                        if 'd3' in ml or 'diploma' in ml:     deg='D3'
-                        elif 'd4' in ml or 'terapan' in ml:   deg='D4'
-                        elif 's1' in ml or 'sarjana' in ml:   deg='S1'
-                        elif 's2' in ml or 'magister' in ml:  deg='S2'
-                        elif 's3' in ml or 'doktor' in ml:    deg='S3'
-                        elif 'profesi' in ml:                  deg='Profesi'
-                    sy = None
-                    if not is_null(tgl):
-                        try:
-                            sy = tgl.year if isinstance(tgl,(datetime,date)) else int(re.search(r'20\d{2}',str(tgl)).group(0))
-                        except: pass
-                    cur.execute("""
-                        INSERT INTO tracer_oltp.education_records
-                            (alumni_id, questionnaire_id, is_further_study,
-                             institution_name, degree, major, start_year,
-                             created_at, updated_at)
-                        VALUES (%s,%s,true,%s,%s,%s,%s,NOW(),NOW())
-                        ON CONFLICT DO NOTHING
-                    """, (aid,qid,str(univ).strip(),deg,major,sy))
+                        # Semua fcode lainnya → simpan apa adanya sebagai string
+                        else:
+                            upsert_answer(cur, rid, fc, str(raw).strip(), idx)
+
+                # ── DISABLED: employment_records ──────────────────────────
+                # Uncomment blok di bawah ini kalau mau mengaktifkan kembali.
+                # Semua data employment sudah masuk via response_answers di atas.
+                #
+                # status_raw = get_cell(row, col_map.get("f8", []))
+                # if not is_null(status_raw):
+                #     try: si = int(float(str(status_raw).strip()))
+                #     except: si = None
+                #     label = STATUS_TO_LABEL.get(si) if si else None
+                #     if label:
+                #         salary = clean_salary(get_cell(row, col_map.get("f505",[])))
+                #         br = get_cell(row, col_map.get("f502",[]))
+                #         waiting = None
+                #         if not is_null(br):
+                #             try:
+                #                 w = float(str(br).strip())
+                #                 waiting = w if 0 <= w <= 60 else None
+                #             except: pass
+                #         cr = get_cell(row, col_map.get("f5b",[]))
+                #         company = str(cr).strip() if not is_null(cr) else None
+                #         # Ambil province & city id dari col_map
+                #         prov_id_str = None
+                #         for ci in col_map.get("f5a1", []):
+                #             if ci < len(row) and not is_null(row[ci]):
+                #                 prov_id_str = resolve_province_id(row[ci])
+                #                 break
+                #         city_id_str = None
+                #         for ci in col_map.get("f5a2", []):
+                #             if ci < len(row) and not is_null(row[ci]):
+                #                 city_id_str = resolve_city_id(row[ci], prov_id_str)
+                #                 break
+                #         prov_code = None
+                #         if prov_id_str:
+                #             pid_int = int(prov_id_str)
+                #             for pc, pid2 in DB_PROVINCES.items():
+                #                 if pid2 == pid_int: prov_code = pc; break
+                #         f14 = get_cell(row, col_map.get("f14",[]))
+                #         is_rel = None
+                #         if not is_null(f14):
+                #             try: is_rel = int(float(str(f14).strip())) in (1,2)
+                #             except: pass
+                #         cur.execute("""
+                #             INSERT INTO tracer_oltp.employment_records
+                #                 (alumni_id, questionnaire_id, employment_status,
+                #                  waiting_months, salary_current, company_name,
+                #                  work_city_id, work_province_code,
+                #                  is_job_relevant, created_at, updated_at)
+                #             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                #             ON CONFLICT (alumni_id, questionnaire_id) DO UPDATE SET
+                #                 employment_status  = EXCLUDED.employment_status,
+                #                 waiting_months     = EXCLUDED.waiting_months,
+                #                 salary_current     = EXCLUDED.salary_current,
+                #                 company_name       = EXCLUDED.company_name,
+                #                 work_city_id       = EXCLUDED.work_city_id,
+                #                 work_province_code = EXCLUDED.work_province_code,
+                #                 is_job_relevant    = EXCLUDED.is_job_relevant,
+                #                 updated_at         = NOW()
+                #         """, (aid, qid, label, waiting, salary, company,
+                #               int(city_id_str) if city_id_str else None,
+                #               prov_code, is_rel))
+
+                # ── DISABLED: education_records ───────────────────────────
+                # Uncomment blok di bawah ini kalau mau mengaktifkan kembali.
+                #
+                # univ = get_cell(row, col_map.get("f18b",[]))
+                # if not is_null(univ):
+                #     prodi = get_cell(row, col_map.get("f18c",[]))
+                #     tgl   = get_cell(row, col_map.get("f18d",[]))
+                #     major = str(prodi).strip() if not is_null(prodi) else None
+                #     deg = "Other"
+                #     if major:
+                #         ml = major.lower()
+                #         if 'd3' in ml or 'diploma' in ml:    deg='D3'
+                #         elif 'd4' in ml or 'terapan' in ml:  deg='D4'
+                #         elif 's1' in ml or 'sarjana' in ml:  deg='S1'
+                #         elif 's2' in ml or 'magister' in ml: deg='S2'
+                #         elif 's3' in ml or 'doktor' in ml:   deg='S3'
+                #         elif 'profesi' in ml:                 deg='Profesi'
+                #     sy = None
+                #     if not is_null(tgl):
+                #         try:
+                #             sy = tgl.year if isinstance(tgl,(datetime,date)) else int(re.search(r'20\d{2}',str(tgl)).group(0))
+                #         except: pass
+                #     cur.execute("""
+                #         INSERT INTO tracer_oltp.education_records
+                #             (alumni_id, questionnaire_id, is_further_study,
+                #              institution_name, degree, major, start_year,
+                #              created_at, updated_at)
+                #         VALUES (%s,%s,true,%s,%s,%s,%s,NOW(),NOW())
+                #         ON CONFLICT DO NOTHING
+                #     """, (aid, qid, str(univ).strip(), deg, major, sy))
 
                 conn.commit()
-                s_ok += 1; ok += 1
+                s_ok += 1
+                ok   += 1
 
             except Exception as e:
                 conn.rollback()
-                s_err += 1; err += 1
+                s_err += 1
+                err   += 1
                 print(f"    [ERROR] {sname} baris {rnum} ({nama}): {e}")
-                if s_err <= 3: traceback.print_exc()
+                if s_err <= 3:
+                    traceback.print_exc()
 
         print(f"  ✓ {sname}: {s_ok} OK, {s_err} error")
 
     cur.close()
     print(f"\n  FILE TOTAL: {ok} berhasil, {err} error")
 
+
 def main():
     print("=" * 60)
-    print("SmartTracer ETL v3")
+    print("SmartTracer ETL v4")
     print("=" * 60)
-    print("\nPastikan sudah jalankan persiapan_etl_v3.sql di pgAdmin!\n")
 
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         conn.autocommit = False
         print(f"✓ Konek ke: {DB_CONFIG['dbname']}")
     except Exception as e:
-        print(f"✗ Gagal konek: {e}"); sys.exit(1)
+        print(f"✗ Gagal konek: {e}")
+        sys.exit(1)
 
     cur = conn.cursor()
-    load_cities(cur)
+    load_geo(cur)
     cur.close()
 
     if not RUN_ALL:
-        print(f"\n[TEST] {TEST_FILE} | grad_year={TEST_GRAD_YEAR} | max_rows={TEST_MAX_ROWS or 'semua'}")
-        process_file(TEST_FILE, TEST_GRAD_YEAR, conn, TEST_MAX_ROWS)
+        print(f"\n[TEST] {TEST_FILE} | grad_year={TEST_GRAD_YEAR} | "
+              f"max_rows={TEST_MAX_ROWS if 'TEST_MAX_ROWS' in dir() else 'semua'}")
+        process_file(TEST_FILE, TEST_GRAD_YEAR, conn,
+                     TEST_MAX_ROWS if 'TEST_MAX_ROWS' in dir() else None)
     else:
         for f, y in EXCEL_FILES:
             if not os.path.exists(f):
-                print(f"\n[SKIP] File tidak ada: {f}"); continue
+                print(f"\n[SKIP] File tidak ada: {f}")
+                continue
             print(f"\n{'='*50}\n{f} | tahun lulus: {y}\n{'='*50}")
             process_file(f, y, conn)
 
@@ -636,10 +874,33 @@ def main():
     print("\n✓ Selesai!")
     print("""
 Verifikasi di pgAdmin:
-  SELECT employment_status, COUNT(*)
-  FROM tracer_oltp.employment_records
-  GROUP BY employment_status ORDER BY COUNT(*) DESC;
+
+-- 1. Cek nama & NIM masuk response_answers
+SELECT ra.question_code, ra.answer_text, ap.name, ap.nim
+FROM tracer_oltp.response_answers ra
+JOIN tracer_oltp.responses r ON r.id = ra.response_id
+JOIN tracer_oltp.alumni_profiles ap ON ap.id = r.alumni_id
+WHERE ra.question_code IN ('nimhsmsmh','nmmhsmsmh')
+LIMIT 10;
+
+-- 2. Cek f5a1 (province id) dan f5a2 (city id) sudah berupa angka integer
+SELECT ra.question_code, ra.answer_text,
+       p.name AS province_name,
+       c.name AS city_name
+FROM tracer_oltp.response_answers ra
+JOIN tracer_oltp.responses r ON r.id = ra.response_id
+LEFT JOIN tracer_oltp.provinces p ON p.id::text = ra.answer_text AND ra.question_code = 'f5a1'
+LEFT JOIN tracer_oltp.cities    c ON c.id::text = ra.answer_text AND ra.question_code = 'f5a2'
+WHERE ra.question_code IN ('f5a1','f5a2')
+LIMIT 20;
+
+-- 3. Jumlah jawaban per question_code (kelengkapan data)
+SELECT question_code, COUNT(*) AS jumlah
+FROM tracer_oltp.response_answers
+GROUP BY question_code
+ORDER BY question_code;
 """)
+
 
 if __name__ == "__main__":
     main()
