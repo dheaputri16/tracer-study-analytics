@@ -7,6 +7,11 @@ cube(`DimUmp`, {
       type: `number`,
       primary_key: true,
     },
+    // ── Natural Key ───────────────────────────────────────────
+    id_ump: {
+      sql: `id_ump`,
+      type: `number`,
+    },
     tahun: {
       sql: `tahun`,
       type: `string`,
