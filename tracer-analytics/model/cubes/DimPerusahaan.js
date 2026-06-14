@@ -1,5 +1,5 @@
 cube(`DimPerusahaan`, {
-  sql_table: `public.dim_perusahaan`,
+  sql: `SELECT * FROM public.dim_perusahaan WHERE flag_perusahaan = true`,
 
   dimensions: {
     // ── Surrogate Key ─────────────────────────────────────────
@@ -13,22 +13,32 @@ cube(`DimPerusahaan`, {
       sql: `id_perusahaan`,
       type: `number`,
     },
-    jenis_perusahaan: {
-      sql: `jenis_perusahaan`,
-      type: `number`,
+    company_name: {
+      sql: `company_name`,
+      type: `string`,
     },
-    tingkat_instansi: {
-      sql: `tingkat_instansi`,
-      type: `number`,
+
+    // Label — ini yang dipakai untuk tampilan di dashboard
+    label_jenis_perusahaan: {
+      sql: `label_jenis_perusahaan`,
+      type: `string`,
+      description: `Jenis perusahaan: Swasta, BUMN, Pemerintah, dll`,
     },
-    kota: {
-      sql: `kota`,
-      type: `number`,
+    label_tingkat_instansi: {
+      sql: `label_tingkat_instansi`,
+      type: `string`,
+      description: `Skala: Lokal, Nasional, Internasional`,
     },
-    provinsi: {
-      sql: `provinsi`,
-      type: `number`,
+    nama_kota: {
+      sql: `nama_kota`,
+      type: `string`,
     },
+    nama_provinsi: {
+      sql: `nama_provinsi`,
+      type: `string`,
+    },
+
+    // SCD fields
     valid_from: {
       sql: `valid_from`,
       type: `time`,

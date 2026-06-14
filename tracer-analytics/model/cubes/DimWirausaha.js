@@ -1,5 +1,5 @@
 cube(`DimWirausaha`, {
-  sql_table: `public.dim_wirausaha`,
+  sql: `SELECT * FROM public.dim_wirausaha WHERE flag_wirausaha = true`,
 
   dimensions: {
     // ── Surrogate Key ─────────────────────────────────────────
@@ -13,25 +13,17 @@ cube(`DimWirausaha`, {
       sql: `id_wirausaha`,
       type: `number`,
     },
-    provinsi: {
-      sql: `provinsi`,
-      type: `number`,
+    nama_provinsi: {
+      sql: `nama_provinsi`,
+      type: `string`,
     },
-    kota_kabupaten: {
-      sql: `kota_kabupaten`,
-      type: `number`,
-    },
-    kode_jabatan: {
-      sql: `kode_jabatan`,
-      type: `number`,
+    nama_kota: {
+      sql: `nama_kota`,
+      type: `string`,
     },
     jabatan: {
       sql: `jabatan`,
       type: `string`,
-    },
-    tingkat_instansi: {
-      sql: `tingkat_instansi`,
-      type: `number`,
     },
     label_tingkat_instansi: {
       sql: `label_tingkat_instansi`,

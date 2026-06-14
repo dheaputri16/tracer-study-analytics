@@ -56,4 +56,29 @@ cube(`FactMultiSelect`, {
       // id 22–34 = opsi AlasanKerjaTdkSesuai (f1601–f1613)
     },
   },
+
+  pre_aggregations: {
+    per_indikator: {
+      type: `rollup`,
+      measures: [
+        FactMultiSelect.count_pilihan,
+        FactMultiSelect.count_alumni_unik,
+      ],
+      dimensions: [
+        DimIndikatorEvaluasi.kode_field,
+        DimIndikatorEvaluasi.label_pertanyaan,
+        DimIndikatorEvaluasi.kategori_pertanyaan,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 day`,
+      },
+    },
+  },
+
 });

@@ -46,7 +46,7 @@ cube(`FactRangeEvaluasi`, {
 
   dimensions: {
     id_fact: {
-      sql: `id_fact`,
+      sql: `id_range_evaluasi`,
       type: `number`,
       primary_key: true,
     },
@@ -69,6 +69,32 @@ cube(`FactRangeEvaluasi`, {
     skor: {
       sql: `skor`,
       type: `number`,
+    },
+  },
+
+  pre_aggregations: {
+    per_indikator: {
+      type: `rollup`,
+      measures: [
+        FactRangeEvaluasi.avg_skor,
+        FactRangeEvaluasi.min_skor,
+        FactRangeEvaluasi.max_skor,
+        FactRangeEvaluasi.count,
+      ],
+      dimensions: [
+        DimIndikatorEvaluasi.kode_field,
+        DimIndikatorEvaluasi.label_pertanyaan,
+        DimIndikatorEvaluasi.kategori_pertanyaan,
+        DimProdi.jenjang,
+        DimProdi.jurusan,
+        DimProdi.nama_prodi,
+        DimAlumni.tahun_lulus,
+        DimWaktu.minggu_snapshot,
+      ],
+      refresh_key: {
+        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        every: `1 day`,
+      },
     },
   },
 });

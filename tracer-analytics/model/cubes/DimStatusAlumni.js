@@ -23,17 +23,5 @@ cube(`DimStatusAlumni`, {
       sql: `label`,
       type: `string`,
     },
-    valid_from: {
-      sql: `valid_from`,
-      type: `time`,
-    },
-    valid_to: {
-      sql: `valid_to`,
-      type: `time`,
-    },
-    flag_status: {
-      sql: `flag_status`,
-      type: `boolean`,
-    },
   },
 });
