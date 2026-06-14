@@ -509,6 +509,7 @@ cube(`FactTracerStudy`, {
       ],
       dimensions: [
         DimWirausaha.label_tingkat_instansi,
+        DimWirausaha.jabatan,
         DimWirausaha.nama_provinsi,
         DimWirausaha.nama_kota,
         DimProdi.jenjang,
