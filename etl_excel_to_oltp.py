@@ -300,6 +300,8 @@ COL_KEYWORD_TO_FCODE = {
     r"penekanan.*Perkuliahan(?!.*luar)":     "f21",
     r"penekanan.*Magang":                    "f24",
     r"penekanan.*Praktikum":                 "f25",
+    r"penekanan.*\[Kerja Lapangan\]":            "f26",
+    r"penekanan.*\[Diskusi\]":                   "f27",
     r"penekanan.*Kerja Lapangan":            "f26",
     r"penekanan.*Diskusi":                   "f27",
     r"penekanan.*Demonstrasi":               "f22",
@@ -529,22 +531,38 @@ def get_program_id(sheet_name, cur):
 
 def get_questionnaire_id(grad_year, cur):
     """
-    Slot kuesioner:
-      slot 1 → lulusan <= 2022
-      slot 2 → lulusan 2023-2025
-      slot 3 → lulusan >= 2026
+    Lookup questionnaire DIKTI berdasarkan grad_year.
+    Struktur DB: questionnaires.target_graduation_years = jsonb array, misal [2022]
+    Fallback: cari berdasarkan code DIKTI_%_v{version} dimana version sesuai tahun.
+
+    Mapping dari SQL:
+      id=1  DIKTI_2026_v1  target=[2022]
+      id=2  DIKTI_2026_v2  target=[2023]
+      id=3  DIKTI_2026_v3  target=[2024]
+    Tahun lain (2019-2021) → fallback ke id=1 (slot terlama)
     """
-    slot = 1 if grad_year <= 2022 else (2 if grad_year <= 2025 else 3)
-    cur.execute(
-        "SELECT id FROM tracer_oltp.questionnaires WHERE program_id = %s AND code LIKE %s LIMIT 1",
-        (slot, f'DIKTI_%_v{slot}')
-    )
+    # Cari questionnaire DIKTI yang target_graduation_years mengandung grad_year ini
+    # Gunakan json.dumps supaya tidak konflik dengan psycopg2 format string
+    import json
+    grad_year_json = json.dumps([grad_year])   # → '[2022]', '[2023]', dll
+    cur.execute("""
+        SELECT id FROM tracer_oltp.questionnaires
+        WHERE code LIKE 'DIKTI_%%'
+          AND target_graduation_years @> %s::jsonb
+        LIMIT 1
+    """, (grad_year_json,))
     row = cur.fetchone()
-    if row: return row[0]
-    cur.execute(
-        "SELECT id FROM tracer_oltp.questionnaires WHERE program_id = %s LIMIT 1",
-        (slot,)
-    )
+    if row:
+        return row[0]
+
+    # Fallback: kalau tidak ada yang exact match (misal 2019-2021),
+    # ambil questionnaire DIKTI dengan id terkecil (versi paling lama)
+    cur.execute("""
+        SELECT id FROM tracer_oltp.questionnaires
+        WHERE code LIKE 'DIKTI_%%'
+        ORDER BY id ASC
+        LIMIT 1
+    """)
     row = cur.fetchone()
     return row[0] if row else 1
 
@@ -629,7 +647,8 @@ def process_file(filepath, grad_year, conn, max_rows=None):
             if not row or is_null(row[0] if row else None) or is_null(row[1] if len(row) > 1 else None):
                 continue
 
-            nama = str(row[0]).strip()
+            # Handle prefix "1. Nama" format di file 2019-2021
+            nama = re.sub(r'^[\d]+\.\s*', '', str(row[0]).strip()).strip()
             nim  = clean_nim(row[1])
             if not nim:
                 continue
@@ -668,15 +687,31 @@ def process_file(filepath, grad_year, conn, max_rows=None):
                 aid = cur.fetchone()[0]
 
                 # ── 2. responses ──────────────────────────────────────────
+                # ON CONFLICT berdasarkan alumni_id saja (bukan questionnaire_id+alumni_id)
+                # supaya alumni yang muncul di beberapa file Excel tidak dapat response baru
+                # Cari dulu apakah alumni ini sudah punya response
                 cur.execute("""
-                    INSERT INTO tracer_oltp.responses
-                        (questionnaire_id, alumni_id, status, submitted_at, source, created_at, updated_at)
-                    VALUES (%s,%s,'submitted',NOW(),'etl',NOW(),NOW())
-                    ON CONFLICT (questionnaire_id, alumni_id) DO UPDATE SET
-                        updated_at = NOW()
-                    RETURNING id
-                """, (qid, aid))
-                rid = cur.fetchone()[0]
+                    SELECT id FROM tracer_oltp.responses
+                    WHERE alumni_id = %s
+                    ORDER BY id DESC LIMIT 1
+                """, (aid,))
+                existing = cur.fetchone()
+                if existing:
+                    rid = existing[0]
+                    # Update questionnaire_id ke yang terbaru (tahun lulus terbaru)
+                    cur.execute("""
+                        UPDATE tracer_oltp.responses
+                        SET questionnaire_id = %s, updated_at = NOW()
+                        WHERE id = %s
+                    """, (qid, rid))
+                else:
+                    cur.execute("""
+                        INSERT INTO tracer_oltp.responses
+                            (questionnaire_id, alumni_id, status, submitted_at, source, created_at, updated_at)
+                        VALUES (%s,%s,'submitted',NOW(),'etl',NOW(),NOW())
+                        RETURNING id
+                    """, (qid, aid))
+                    rid = cur.fetchone()[0]
 
                 # ── 3. response_answers — SEMUA kolom Excel ───────────────
                 #
@@ -694,12 +729,24 @@ def process_file(filepath, grad_year, conn, max_rows=None):
                 # Simpan province_id_str dulu (dibutuhkan saat resolve city)
                 province_id_str = None
 
+                # fcode boolean (f401-f415, f1601-f1613): boleh multi-kolom,
+                # tiap kolom = satu pilihan → answer_index = urutan kolom
+                # Semua fcode lain: ambil HANYA kolom pertama yang match (answer_index=0)
+                BOOLEAN_FCODES = {
+                    'f401','f402','f403','f404','f405','f406','f407','f408','f409','f410',
+                    'f411','f412','f413','f414','f415',
+                    'f1601','f1602','f1603','f1604','f1605','f1606','f1607','f1608',
+                    'f1609','f1610','f1611','f1612','f1613',
+                }
+
                 for fc, col_indices in col_map.items():
                     # nimhsmsmh & nmmhsmsmh sudah di-insert hardcode dari row[0]/row[1]
-                    # Skip supaya tidak false-match atau double-insert
                     if fc in ("nimhsmsmh", "nmmhsmsmh"):
                         continue
-                    for idx, ci in enumerate(col_indices):
+                    # Non-boolean: hanya pakai kolom pertama yang match, answer_index=0
+                    # Boolean: pakai semua kolom, tiap kolom = answer_index unik
+                    indices_to_use = col_indices if fc in BOOLEAN_FCODES else col_indices[:1]
+                    for idx, ci in enumerate(indices_to_use):
                         if ci >= len(row):
                             continue
                         raw = row[ci]
