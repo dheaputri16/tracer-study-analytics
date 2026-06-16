@@ -1,25 +1,22 @@
 """
 ============================================================
-SmartTracer ETL v4: Excel Bersih (2019-2024) → PostgreSQL OLTP
+SmartTracer ETL v5: Excel Bersih (2019-2024) → PostgreSQL OLTP
 ============================================================
-PERUBAHAN dari v3:
-  1. PRIORITAS UTAMA: response_answers memuat SEMUA jawaban Excel
-     — termasuk kode identitas kementrian (nimhsmsmh, nmmhsmsmh, dll)
-     — termasuk f5a1 dan f5a2 (province id & city id integer, bukan string nama)
-     — semua f-code lainnya ikut masuk
-  2. alumni_profiles juga diupdate kolom email, phone, nik, npwp, kode_pt
-  3. employment_records & education_records → DIKOMENTARI (tidak diisi)
-     Uncomment blok "# DISABLED: employment_records" dan
-     "# DISABLED: education_records" kalau nanti mau diaktifkan lagi
-  4. Mapping header Excel → question_code menggunakan teks deskriptif
-     sesuai form kementrian PDDIKTI
-  5. f5a2 (Kota/Kabupaten) ditambahkan ke mapping
-  6. salary (f505) dipastikan masuk ke response_answers sekaligus
-     ke salary_current di employment_records (kalau DISABLED dibuka)
+PERUBAHAN dari v4:
+  1. FIX f502 DUPLIKAT: f502 dipastikan SELALU answer_index = 0
+     (sebelumnya ada celah karena 2 keyword regex yang sama-sama
+     match f502 di kolom Excel berbeda → menumpuk index 0,1,2,dst
+     di beberapa file/tahun yang strukturnya berbeda)
+  2. NULL/KOSONG → diisi "0" (bukan di-skip lagi).
+     Berlaku untuk semua question_code KECUALI provinsi/kota
+     (f5a1/f5a2 tetap NULL kalau kosong, karena 0 bukan id valid)
+  3. CLEANUP OTOMATIS: sebelum insert ulang, ETL menghapus dulu
+     answer_index > 0 yang nyasar untuk fcode non-boolean
+     (safety net kalau ada sisa data lama yang menumpuk)
 ============================================================
 """
 
-import os, sys, re, traceback
+import os, sys, re, traceback, json
 import psycopg2
 import openpyxl
 from datetime import datetime, date
@@ -51,7 +48,6 @@ RUN_ALL = True   # False = testing satu file saja
 
 # ══════════════════════════════════════════════════════════════════
 # SHEET → PROGRAM CODE
-# programs.code = kode singkat (TKG, TKS, dll)
 # ══════════════════════════════════════════════════════════════════
 SHEET_TO_PROGRAM_CODE = {
     "D3 - Teknik Konstruksi Gedung":         "TKG",
@@ -118,7 +114,7 @@ STATUS_WIRAUSAHA = {3, 7}
 STATUS_ADA_KERJA = STATUS_BEKERJA | STATUS_WIRAUSAHA
 
 # ══════════════════════════════════════════════════════════════════
-# MAPPING PROVINSI (untuk fallback parse_province jika perlu)
+# MAPPING PROVINSI (fallback)
 # ══════════════════════════════════════════════════════════════════
 PROVINCE_NAME_TO_CODE = {
     "DKI Jakarta":"10000","Jawa Barat":"20000","Jawa Tengah":"30000",
@@ -183,12 +179,10 @@ CITY_PREFIX_TO_PROV = {
 }
 
 # ══════════════════════════════════════════════════════════════════
-# LOOKUP TABEL (diisi dari DB saat startup)
-# DB_PROVINCES : code → id   (misal "20000" → 13)
-# DB_CITIES    : province_code → {city_name_lower → (city_id, city_name_asli)}
+# LOOKUP GEO (diisi dari DB saat startup)
 # ══════════════════════════════════════════════════════════════════
-DB_PROVINCES = {}   # province_code → province_id (integer, untuk answer_text)
-DB_CITIES    = {}   # province_code → {name_lower → (city_id, city_name_asli)}
+DB_PROVINCES = {}
+DB_CITIES    = {}
 
 def load_geo(cur):
     cur.execute("SELECT id, code FROM tracer_oltp.provinces")
@@ -202,11 +196,6 @@ def load_geo(cur):
 
 # ══════════════════════════════════════════════════════════════════
 # MAPPING KOLOM EXCEL → question_code
-# Key = substring / regex yang dicari di header Excel (case-insensitive)
-# Value = question_code yang akan masuk ke response_answers.question_code
-#
-# IDENTITAS KEMENTRIAN (bagian atas form)
-# Header Excel = teks deskriptif form kementrian
 # ══════════════════════════════════════════════════════════════════
 COL_KEYWORD_TO_FCODE = {
     # ── Identitas kementrian ─────────────────────────────────────
@@ -222,10 +211,21 @@ COL_KEYWORD_TO_FCODE = {
     r"status Anda saat ini":                      "f8",
     r"STATUS ANDA SAAT INI":                      "f8",
 
-    r"berapa bulan.*mendapatkan pekerjaan pertama": "f502",
-    r"berapa bulan.*mendapatkan pekerjaan \?":     "f502",
-    r"berapa bulan.*memulai wiraswasta":           "f502",
-    r"mendapatkan pekerjaan <= 6 bulan":           "f502",
+    # f502: dipecah jadi 2 fcode SEMENTARA saat deteksi kolom —
+    # f502 (general, PRIORITAS) dan f502_alt (pekerjaan pertama / wiraswasta,
+    # FALLBACK). Saat insert, kalau f502 general ADA ISI → itu yang dipakai.
+    # Kalau f502 general kosong tapi f502_alt ada isi → pakai f502_alt.
+    # Ini menangani 5 kasus di 2021 dimana DUA kolom sama-sama terisi
+    # dengan nilai berbeda — sesuai instruksi: selalu pilih kolom
+    # "berapa bulan mendapatkan pekerjaan" (general), bukan "pekerjaan pertama".
+    r"berapa bulan.*mendapatkan pekerjaan\s*\?":   "f502",        # general — PRIORITAS
+    r"berapa bulan.*mendapatkan pekerjaan pertama": "f502_alt",   # fallback
+    r"berapa bulan.*memulai wiraswasta":            "f502_alt",   # fallback
+    # CATATAN: keyword "mendapatkan pekerjaan <= 6 bulan" DIHAPUS dari sini.
+    # Itu pertanyaan ya/tidak ("Apakah anda telah mendapatkan pekerjaan <= 6
+    # bulan / termasuk bekerja sebelum lulus?"), BUKAN pertanyaan jumlah bulan.
+    # Kalau di-map ke f502, nilainya (1/2) salah tertimpa ke jawaban f502 yang
+    # asli (jumlah bulan). Root cause bug 5 alumni 2021 yang semua jadi "1".
 
     r"rata-rata pendapatan.*per bulan":            "f505",
     r"rata-rata pendapatan.*take home":            "f505",
@@ -287,29 +287,20 @@ COL_KEYWORD_TO_FCODE = {
     r"saat ini.*Pengembangan":                      "f1774",
 
     # ── Metode pembelajaran ──────────────────────────────────────
-    # Metode pembelajaran — fcode mengacu ke questionnaire_questions (kementrian)
-    # Keyword disesuaikan ke header Excel POLBAN yang asli
-    # Excel pakai format: "...penekanan...[Nama Metode]"
-    #
-    # Yang ADA di Excel → di-map ke fcode kementrian terdekat:
-    r"penekanan.*\[Perkuliahan dalam Prodi\]":   "f21",  # Perkuliahan
-    r"penekanan.*\[Magang\]":                    "f24",  # Magang
-    r"penekanan.*\[Praktikum":                   "f25",  # Praktikum
-    # Fallback format lama (file 2019-2021 mungkin pakai format tanpa bracket)
-    # Pakai negative lookahead supaya [Perkuliahan di luar Prodi] tidak ikut match
-    r"penekanan.*Perkuliahan(?!.*luar)":     "f21",
-    r"penekanan.*Magang":                    "f24",
-    r"penekanan.*Praktikum":                 "f25",
+    r"penekanan.*\[Perkuliahan dalam Prodi\]":   "f21",
+    r"penekanan.*\[Magang\]":                    "f24",
+    r"penekanan.*\[Praktikum":                   "f25",
     r"penekanan.*\[Kerja Lapangan\]":            "f26",
     r"penekanan.*\[Diskusi\]":                   "f27",
-    r"penekanan.*Kerja Lapangan":            "f26",
-    r"penekanan.*Diskusi":                   "f27",
-    r"penekanan.*Demonstrasi":               "f22",
-    r"penekanan.*Partisipasi":               "f23",
-    r"penekanan.*[Pp]royek [Rr]iset":            "f23",
-    # f22 (Demonstrasi), f23 (Partisipasi proyek riset), f26 (Kerja Lapangan),
-    # f27 (Diskusi) → tidak ada padanan di Excel POLBAN, jadi memang tidak terisi.
-    # Ini wajar — fcode tetap sesuai kementrian, datanya NULL untuk kolom tsb.
+    r"penekanan.*Perkuliahan(?!.*luar)":         "f21",
+    r"penekanan.*Magang":                        "f24",
+    r"penekanan.*Praktikum":                     "f25",
+    r"penekanan.*Kerja Lapangan":                "f26",
+    r"penekanan.*Diskusi":                       "f27",
+    r"penekanan.*Demonstrasi":                   "f22",
+    r"penekanan.*Partisipasi":                   "f23",
+    r"penekanan.*[Pp]royek [Rr]iset":             "f23",
+    # f22, f23 → tidak ada padanan di Excel POLBAN, memang tidak terisi.
 
     # ── Kapan mulai mencari kerja ────────────────────────────────
     r"Kapan.*mulai mencari pekerjaan":              "f301",
@@ -371,7 +362,18 @@ FCODE_PROVINCE = {"f5a1"}
 # question_code yang berisi nilai kota (perlu di-resolve ke city_id)
 FCODE_CITY     = {"f5a2"}
 
-# question_code yang merupakan identitas alumni (disimpan juga ke alumni_profiles)
+# fcode boolean (multi-pilihan): boleh banyak kolom, tiap kolom = answer_index unik
+BOOLEAN_FCODES = {
+    'f401','f402','f403','f404','f405','f406','f407','f408','f409','f410',
+    'f411','f412','f413','f414','f415',
+    'f1601','f1602','f1603','f1604','f1605','f1606','f1607','f1608',
+    'f1609','f1610','f1611','f1612','f1613',
+}
+
+# fcode yang TIDAK boleh diisi "0" kalau kosong (0 bukan ID valid untuk geo)
+FCODE_NO_ZERO_FILL = {"f5a1", "f5a2"}
+
+# question_code identitas alumni (disimpan juga ke alumni_profiles)
 FCODE_IDENTITY = {
     "nimhsmsmh", "kdptimsmh", "tahun_lulus", "kdpstmsmh",
     "nmmhsmsmh", "telpomsmh", "emailmsmh", "nik", "npwp",
@@ -382,54 +384,34 @@ FCODE_IDENTITY = {
 # ══════════════════════════════════════════════════════════════════
 
 def resolve_province_id(raw):
-    """
-    Input raw dari Excel (bisa: angka index, kode string "20000", nama "Jawa Barat",
-    atau format "Prefix - Kota" yang digunakan untuk kolom f5a1 di beberapa tahun).
-    Return: province_id (integer) sebagai string, atau None kalau tidak ketemu.
-    """
     if raw is None: return None
     s = str(raw).strip()
     if s in ('', 'nan', 'None', '-'): return None
-
-    # Coba angka langsung → index
     try:
         n = int(float(s))
         if 1 <= n <= 40:
             pcode = PROVINCE_INDEX_TO_CODE.get(n)
             return str(DB_PROVINCES[pcode]) if pcode and pcode in DB_PROVINCES else None
-        # Bisa jadi sudah berupa code langsung (misal 20000)
         s_code = str(n)
         if s_code in DB_PROVINCES:
             return str(DB_PROVINCES[s_code])
     except ValueError:
         pass
-
-    # Coba nama provinsi
     pcode = PROVINCE_NAME_TO_CODE.get(s)
     if pcode and pcode in DB_PROVINCES:
         return str(DB_PROVINCES[pcode])
-
-    # Coba format "Prefix - ..." (kolom provinsi kadang format ini)
     parts = re.split(r'\s*[-–]\s*', s, maxsplit=1)
     if len(parts) == 2:
         prefix_pcode = CITY_PREFIX_TO_PROV.get(parts[0].strip().lower())
         if prefix_pcode and prefix_pcode in DB_PROVINCES:
             return str(DB_PROVINCES[prefix_pcode])
-
     return None
 
 
 def resolve_city_id(raw, province_id_str):
-    """
-    Input raw dari Excel — format "Prefix - Nama Kota" atau nama kota saja.
-    province_id_str = hasil resolve_province_id (sudah integer sebagai string).
-    Return: city_id (integer) sebagai string, atau None.
-    """
     if raw is None: return None
     s = str(raw).strip()
     if s in ('', 'nan', 'None', '-'): return None
-
-    # Cari province_code dari province_id
     pcode = None
     if province_id_str:
         try:
@@ -439,49 +421,26 @@ def resolve_city_id(raw, province_id_str):
                     pcode = pc
                     break
         except: pass
-
-    # Ekstrak nama kota dari format "Prefix - Nama Kota"
     parts = re.split(r'\s*[-–]\s*', s, maxsplit=1)
     city_part = parts[1].strip() if len(parts) == 2 else s.strip()
-
-    # Kalau belum ada pcode, coba dari prefix
     if not pcode and len(parts) == 2:
         prefix_pcode = CITY_PREFIX_TO_PROV.get(parts[0].strip().lower())
         if prefix_pcode:
             pcode = prefix_pcode
-
     if not pcode:
         return None
-
     prov_cities = DB_CITIES.get(pcode, {})
-
-    # Normalisasi
     city_norm = re.sub(r'^kota\s+administrasi\s+', 'Kota ', city_part, flags=re.I)
     city_norm = re.sub(r'^kabupaten\s+', 'Kab. ', city_norm, flags=re.I)
-
-    # Direct match
     entry = prov_cities.get(city_norm.lower())
     if entry:
         return str(entry[0])
-
-    # Fuzzy: strip Kota/Kab prefix
     clean = re.sub(r'^(kab\.\s*|kota\s*)', '', city_norm.lower()).strip()
     for dbl, (dbi, _) in prov_cities.items():
         clean_db = re.sub(r'^(kab\.\s*|kota\s*)', '', dbl).strip()
         if clean == clean_db:
             return str(dbi)
-
     return None
-
-
-def parse_province_fallback(v):
-    """Fallback sederhana untuk detect province_code dari raw value."""
-    if v is None: return None
-    try:
-        n = int(float(str(v).strip()))
-        return PROVINCE_INDEX_TO_CODE.get(n) if n <= 40 else None
-    except: pass
-    return PROVINCE_NAME_TO_CODE.get(str(v).strip())
 
 # ══════════════════════════════════════════════════════════════════
 # HELPERS UMUM
@@ -489,7 +448,9 @@ def parse_province_fallback(v):
 
 def is_null(v):
     if v is None: return True
-    return str(v).strip() in ('', 'nan', 'None', 'NULL', '-', '.', '0')
+    return str(v).strip() in ('', 'nan', 'None', 'NULL', '-', '.')
+    # CATATAN: '0' SENGAJA tidak dianggap null lagi di v5 — kalau Excel
+    # memang berisi angka 0, itu jawaban valid, bukan kekosongan.
 
 def clean_nim(v):
     if v is None: return None
@@ -498,11 +459,9 @@ def clean_nim(v):
     return s.split('.')[0] if '.' in s else s
 
 def clean_salary(v):
-    """Parse salary dari berbagai format Excel → float atau None."""
     if v is None: return None
     s = re.sub(r'[Rr][Pp]\.?\s*', '', str(v).strip())
-    if s in ('', 'nan', 'None', '0', '-'): return None
-    # Titik ribuan: "1.500.000" → "1500000"
+    if s in ('', 'nan', 'None', '-'): return None
     if s.count('.') > 1:
         s = s.replace('.', '')
     elif s.count('.') == 1 and len(s.split('.')[1]) == 3:
@@ -510,8 +469,7 @@ def clean_salary(v):
     s = s.replace(',', '.')
     try:
         n = float(s)
-        if n <= 0: return None
-        # Angka kecil (<= 100) kemungkinan dalam juta
+        if n < 0: return None
         return n * 1_000_000 if 0 < n <= 100 else n
     except:
         return None
@@ -530,21 +488,7 @@ def get_program_id(sheet_name, cur):
     return row[0] if row else None
 
 def get_questionnaire_id(grad_year, cur):
-    """
-    Lookup questionnaire DIKTI berdasarkan grad_year.
-    Struktur DB: questionnaires.target_graduation_years = jsonb array, misal [2022]
-    Fallback: cari berdasarkan code DIKTI_%_v{version} dimana version sesuai tahun.
-
-    Mapping dari SQL:
-      id=1  DIKTI_2026_v1  target=[2022]
-      id=2  DIKTI_2026_v2  target=[2023]
-      id=3  DIKTI_2026_v3  target=[2024]
-    Tahun lain (2019-2021) → fallback ke id=1 (slot terlama)
-    """
-    # Cari questionnaire DIKTI yang target_graduation_years mengandung grad_year ini
-    # Gunakan json.dumps supaya tidak konflik dengan psycopg2 format string
-    import json
-    grad_year_json = json.dumps([grad_year])   # → '[2022]', '[2023]', dll
+    grad_year_json = json.dumps([grad_year])
     cur.execute("""
         SELECT id FROM tracer_oltp.questionnaires
         WHERE code LIKE 'DIKTI_%%'
@@ -554,9 +498,6 @@ def get_questionnaire_id(grad_year, cur):
     row = cur.fetchone()
     if row:
         return row[0]
-
-    # Fallback: kalau tidak ada yang exact match (misal 2019-2021),
-    # ambil questionnaire DIKTI dengan id terkecil (versi paling lama)
     cur.execute("""
         SELECT id FROM tracer_oltp.questionnaires
         WHERE code LIKE 'DIKTI_%%'
@@ -570,7 +511,11 @@ def build_col_map(headers):
     """
     Scan headers Excel, cocokkan ke COL_KEYWORD_TO_FCODE.
     Return dict: fcode → [col_index, ...]
-    Satu fcode bisa punya banyak kolom (misal f401-f415 tiap satu kolom).
+
+    PENTING: untuk fcode NON-boolean, kalau ada lebih dari satu kolom
+    yang match (karena header berbeda tapi sama-sama lolos regex),
+    HANYA kolom pertama yang dipertahankan di sini juga (selain nanti
+    di-enforce lagi saat insert) — supaya tidak ada ambiguitas index.
     """
     col_map = {}
     for ci, h in enumerate(headers):
@@ -593,16 +538,21 @@ def get_cell(row, indices):
     return None
 
 # ══════════════════════════════════════════════════════════════════
-# INSERT response_answers — satu baris per (response_id, question_code, answer_index)
+# INSERT response_answers
 # ══════════════════════════════════════════════════════════════════
 
 def upsert_answer(cur, rid, question_code, answer_text, answer_index=0):
-    """Insert atau update satu jawaban ke response_answers."""
-    if answer_text is None:
-        return
-    val = str(answer_text).strip()
-    if val in ('', 'nan', 'None'):
-        return
+    """
+    Insert atau update satu jawaban ke response_answers.
+    v5: kalau answer_text kosong/None DAN fcode bukan f5a1/f5a2,
+    isi dengan "0" (bukan di-skip).
+    f5a1/f5a2 tetap di-skip kalau kosong karena 0 bukan ID valid.
+    """
+    val = None if answer_text is None else str(answer_text).strip()
+    if val in (None, '', 'nan', 'None'):
+        if question_code in FCODE_NO_ZERO_FILL:
+            return   # f5a1/f5a2 kosong → tidak diisi sama sekali
+        val = "0"
     cur.execute("""
         INSERT INTO tracer_oltp.response_answers
             (response_id, question_code, answer_index, answer_text, created_at, updated_at)
@@ -611,6 +561,20 @@ def upsert_answer(cur, rid, question_code, answer_text, answer_index=0):
             answer_text = EXCLUDED.answer_text,
             updated_at  = NOW()
     """, (rid, question_code, answer_index, val))
+
+
+def cleanup_stray_answers(cur, rid, fc):
+    """
+    Safety net: untuk fcode NON-boolean, hapus answer_index > 0 yang
+    mungkin tertinggal dari run ETL sebelumnya (sebelum fix v5) —
+    supaya tidak ada duplikat menumpuk per response_id.
+    """
+    if fc in BOOLEAN_FCODES:
+        return
+    cur.execute("""
+        DELETE FROM tracer_oltp.response_answers
+        WHERE response_id = %s AND question_code = %s AND answer_index > 0
+    """, (rid, fc))
 
 # ══════════════════════════════════════════════════════════════════
 # ETL UTAMA
@@ -643,11 +607,9 @@ def process_file(filepath, grad_year, conn, max_rows=None):
             if max_rows and rnum > max_rows + 1:
                 break
 
-            # Kolom 0 = Nama, kolom 1 = NIM
             if not row or is_null(row[0] if row else None) or is_null(row[1] if len(row) > 1 else None):
                 continue
 
-            # Handle prefix "1. Nama" format di file 2019-2021
             nama = re.sub(r'^[\d]+\.\s*', '', str(row[0]).strip()).strip()
             nim  = clean_nim(row[1])
             if not nim:
@@ -655,7 +617,6 @@ def process_file(filepath, grad_year, conn, max_rows=None):
 
             try:
                 # ── 1. alumni_profiles ────────────────────────────────────
-                # Ambil field tambahan kalau ada di col_map
                 email_raw = get_cell(row, col_map.get("emailmsmh", []))
                 phone_raw = get_cell(row, col_map.get("telpomsmh", []))
                 nik_raw   = get_cell(row, col_map.get("nik", []))
@@ -687,18 +648,15 @@ def process_file(filepath, grad_year, conn, max_rows=None):
                 aid = cur.fetchone()[0]
 
                 # ── 2. responses ──────────────────────────────────────────
-                # ON CONFLICT berdasarkan alumni_id saja (bukan questionnaire_id+alumni_id)
-                # supaya alumni yang muncul di beberapa file Excel tidak dapat response baru
-                # Cari dulu apakah alumni ini sudah punya response
+                # Satu alumni = satu response, walaupun muncul di beberapa file Excel
                 cur.execute("""
                     SELECT id FROM tracer_oltp.responses
                     WHERE alumni_id = %s
-                    ORDER BY id DESC LIMIT 1
+                    ORDER BY id ASC LIMIT 1
                 """, (aid,))
                 existing = cur.fetchone()
                 if existing:
                     rid = existing[0]
-                    # Update questionnaire_id ke yang terbaru (tahun lulus terbaru)
                     cur.execute("""
                         UPDATE tracer_oltp.responses
                         SET questionnaire_id = %s, updated_at = NOW()
@@ -714,160 +672,90 @@ def process_file(filepath, grad_year, conn, max_rows=None):
                     rid = cur.fetchone()[0]
 
                 # ── 3. response_answers — SEMUA kolom Excel ───────────────
-                #
-                # Iterasi SEMUA fcode yang terdeteksi di col_map.
-                # Khusus f5a1 → resolve ke province_id
-                # Khusus f5a2 → resolve ke city_id
-                # Boolean (f401-f415, f1601-f1613) → tiap kolom = answer_index unik
-                # Fcode yang muncul > 1 kolom (rare) → answer_index berbeda
-
-                # Identitas wajib dari kolom 0 & 1 (Nama, NIM) selalu di-insert
-                # langsung — tidak lewat col_map supaya tidak pernah terlewat.
                 upsert_answer(cur, rid, "nmmhsmsmh", nama, 0)
                 upsert_answer(cur, rid, "nimhsmsmh", nim,  0)
 
-                # Simpan province_id_str dulu (dibutuhkan saat resolve city)
                 province_id_str = None
 
-                # fcode boolean (f401-f415, f1601-f1613): boleh multi-kolom,
-                # tiap kolom = satu pilihan → answer_index = urutan kolom
-                # Semua fcode lain: ambil HANYA kolom pertama yang match (answer_index=0)
-                BOOLEAN_FCODES = {
-                    'f401','f402','f403','f404','f405','f406','f407','f408','f409','f410',
-                    'f411','f412','f413','f414','f415',
-                    'f1601','f1602','f1603','f1604','f1605','f1606','f1607','f1608',
-                    'f1609','f1610','f1611','f1612','f1613',
-                }
+                # ── f502 khusus: gabungkan f502 (general) + f502_alt (pekerjaan
+                # pertama/wiraswasta) SEBELUM loop utama. Prioritas: f502 general
+                # menang kalau dua-duanya terisi (sesuai instruksi tim) — ini
+                # menangani 5 kasus alumni 2021 yang kedua kolom sama-sama ada isi.
+                if "f502" in col_map or "f502_alt" in col_map:
+                    raw_general = get_cell(row, col_map.get("f502", []))
+                    raw_alt     = get_cell(row, col_map.get("f502_alt", []))
+                    # Prioritas: general dulu, fallback ke alt kalau general kosong
+                    final_f502 = raw_general if not is_null(raw_general) else raw_alt
+                    cleanup_stray_answers(cur, rid, "f502")
+                    if is_null(final_f502):
+                        upsert_answer(cur, rid, "f502", None, 0)
+                    else:
+                        upsert_answer(cur, rid, "f502", str(final_f502).strip(), 0)
 
                 for fc, col_indices in col_map.items():
-                    # nimhsmsmh & nmmhsmsmh sudah di-insert hardcode dari row[0]/row[1]
-                    if fc in ("nimhsmsmh", "nmmhsmsmh"):
+                    if fc in ("nimhsmsmh", "nmmhsmsmh", "f502", "f502_alt"):
+                        # f502/f502_alt sudah ditangani khusus di atas
                         continue
-                    # Non-boolean: hanya pakai kolom pertama yang match, answer_index=0
-                    # Boolean: pakai semua kolom, tiap kolom = answer_index unik
-                    indices_to_use = col_indices if fc in BOOLEAN_FCODES else col_indices[:1]
-                    for idx, ci in enumerate(indices_to_use):
-                        if ci >= len(row):
-                            continue
-                        raw = row[ci]
+
+                    # Cleanup safety net: hapus sisa answer_index > 0 dari
+                    # run lama untuk fcode non-boolean
+                    cleanup_stray_answers(cur, rid, fc)
+
+                    if fc in BOOLEAN_FCODES:
+                        # Boolean: semua kolom dipakai, tiap kolom = answer_index berbeda
+                        # (tidak ada masalah "kolom mana yang terisi" karena ini
+                        #  multi-pilihan, tiap kolom representasi pilihan terpisah)
+                        for idx, ci in enumerate(col_indices):
+                            if ci >= len(row):
+                                continue
+                            raw = row[ci]
+                            if is_null(raw):
+                                upsert_answer(cur, rid, fc, None, idx)
+                            else:
+                                upsert_answer(cur, rid, fc, str(raw).strip(), idx)
+                        continue
+
+                    # ── Non-boolean (termasuk f502) ──────────────────────
+                    # PENTING: kalau ada beberapa kolom yang match fcode yang
+                    # sama (misal "...pekerjaan pertama?" DAN "...memulai
+                    # wiraswasta?" sama-sama → f502), kita AMBIL KOLOM YANG
+                    # ADA ISINYA, bukan sekadar kolom pertama dalam urutan.
+                    # Karena satu alumni cuma punya SATU dari dua kondisi itu
+                    # (bekerja ATAU wiraswasta), get_cell() otomatis pilih
+                    # mana yang terisi. answer_index SELALU 0 — tidak pernah
+                    # lebih dari satu baris per (response_id, question_code).
+                    raw = get_cell(row, col_indices)
+                    idx = 0
+
+                    if fc in FCODE_PROVINCE:
                         if is_null(raw):
-                            continue
+                            continue   # f5a1 kosong → skip total, tidak isi 0
+                        resolved = resolve_province_id(raw)
+                        if resolved:
+                            province_id_str = resolved
+                        answer_val = resolved or str(raw).strip()
+                        upsert_answer(cur, rid, fc, answer_val, idx)
 
-                        # Resolve provinsi → ID integer
-                        if fc in FCODE_PROVINCE:
-                            resolved = resolve_province_id(raw)
-                            if resolved:
-                                province_id_str = resolved
-                            answer_val = resolved or str(raw).strip()
-                            upsert_answer(cur, rid, fc, answer_val, idx)
+                    elif fc in FCODE_CITY:
+                        if is_null(raw):
+                            continue   # f5a2 kosong → skip total, tidak isi 0
+                        resolved = resolve_city_id(raw, province_id_str)
+                        answer_val = resolved or str(raw).strip()
+                        upsert_answer(cur, rid, fc, answer_val, idx)
 
-                        # Resolve kota → ID integer
-                        elif fc in FCODE_CITY:
-                            resolved = resolve_city_id(raw, province_id_str)
-                            answer_val = resolved or str(raw).strip()
-                            upsert_answer(cur, rid, fc, answer_val, idx)
-
-                        # Salary: simpan angka yang sudah dibersihkan
-                        elif fc == "f505":
+                    elif fc == "f505":
+                        if is_null(raw):
+                            upsert_answer(cur, rid, fc, None, idx)
+                        else:
                             salary_clean = clean_salary(raw)
                             answer_val = str(int(salary_clean)) if salary_clean else str(raw).strip()
                             upsert_answer(cur, rid, fc, answer_val, idx)
 
-                        # Semua fcode lainnya → simpan apa adanya sebagai string
+                    else:
+                        if is_null(raw):
+                            upsert_answer(cur, rid, fc, None, idx)
                         else:
                             upsert_answer(cur, rid, fc, str(raw).strip(), idx)
-
-                # ── DISABLED: employment_records ──────────────────────────
-                # Uncomment blok di bawah ini kalau mau mengaktifkan kembali.
-                # Semua data employment sudah masuk via response_answers di atas.
-                #
-                # status_raw = get_cell(row, col_map.get("f8", []))
-                # if not is_null(status_raw):
-                #     try: si = int(float(str(status_raw).strip()))
-                #     except: si = None
-                #     label = STATUS_TO_LABEL.get(si) if si else None
-                #     if label:
-                #         salary = clean_salary(get_cell(row, col_map.get("f505",[])))
-                #         br = get_cell(row, col_map.get("f502",[]))
-                #         waiting = None
-                #         if not is_null(br):
-                #             try:
-                #                 w = float(str(br).strip())
-                #                 waiting = w if 0 <= w <= 60 else None
-                #             except: pass
-                #         cr = get_cell(row, col_map.get("f5b",[]))
-                #         company = str(cr).strip() if not is_null(cr) else None
-                #         # Ambil province & city id dari col_map
-                #         prov_id_str = None
-                #         for ci in col_map.get("f5a1", []):
-                #             if ci < len(row) and not is_null(row[ci]):
-                #                 prov_id_str = resolve_province_id(row[ci])
-                #                 break
-                #         city_id_str = None
-                #         for ci in col_map.get("f5a2", []):
-                #             if ci < len(row) and not is_null(row[ci]):
-                #                 city_id_str = resolve_city_id(row[ci], prov_id_str)
-                #                 break
-                #         prov_code = None
-                #         if prov_id_str:
-                #             pid_int = int(prov_id_str)
-                #             for pc, pid2 in DB_PROVINCES.items():
-                #                 if pid2 == pid_int: prov_code = pc; break
-                #         f14 = get_cell(row, col_map.get("f14",[]))
-                #         is_rel = None
-                #         if not is_null(f14):
-                #             try: is_rel = int(float(str(f14).strip())) in (1,2)
-                #             except: pass
-                #         cur.execute("""
-                #             INSERT INTO tracer_oltp.employment_records
-                #                 (alumni_id, questionnaire_id, employment_status,
-                #                  waiting_months, salary_current, company_name,
-                #                  work_city_id, work_province_code,
-                #                  is_job_relevant, created_at, updated_at)
-                #             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
-                #             ON CONFLICT (alumni_id, questionnaire_id) DO UPDATE SET
-                #                 employment_status  = EXCLUDED.employment_status,
-                #                 waiting_months     = EXCLUDED.waiting_months,
-                #                 salary_current     = EXCLUDED.salary_current,
-                #                 company_name       = EXCLUDED.company_name,
-                #                 work_city_id       = EXCLUDED.work_city_id,
-                #                 work_province_code = EXCLUDED.work_province_code,
-                #                 is_job_relevant    = EXCLUDED.is_job_relevant,
-                #                 updated_at         = NOW()
-                #         """, (aid, qid, label, waiting, salary, company,
-                #               int(city_id_str) if city_id_str else None,
-                #               prov_code, is_rel))
-
-                # ── DISABLED: education_records ───────────────────────────
-                # Uncomment blok di bawah ini kalau mau mengaktifkan kembali.
-                #
-                # univ = get_cell(row, col_map.get("f18b",[]))
-                # if not is_null(univ):
-                #     prodi = get_cell(row, col_map.get("f18c",[]))
-                #     tgl   = get_cell(row, col_map.get("f18d",[]))
-                #     major = str(prodi).strip() if not is_null(prodi) else None
-                #     deg = "Other"
-                #     if major:
-                #         ml = major.lower()
-                #         if 'd3' in ml or 'diploma' in ml:    deg='D3'
-                #         elif 'd4' in ml or 'terapan' in ml:  deg='D4'
-                #         elif 's1' in ml or 'sarjana' in ml:  deg='S1'
-                #         elif 's2' in ml or 'magister' in ml: deg='S2'
-                #         elif 's3' in ml or 'doktor' in ml:   deg='S3'
-                #         elif 'profesi' in ml:                 deg='Profesi'
-                #     sy = None
-                #     if not is_null(tgl):
-                #         try:
-                #             sy = tgl.year if isinstance(tgl,(datetime,date)) else int(re.search(r'20\d{2}',str(tgl)).group(0))
-                #         except: pass
-                #     cur.execute("""
-                #         INSERT INTO tracer_oltp.education_records
-                #             (alumni_id, questionnaire_id, is_further_study,
-                #              institution_name, degree, major, start_year,
-                #              created_at, updated_at)
-                #         VALUES (%s,%s,true,%s,%s,%s,%s,NOW(),NOW())
-                #         ON CONFLICT DO NOTHING
-                #     """, (aid, qid, str(univ).strip(), deg, major, sy))
 
                 conn.commit()
                 s_ok += 1
@@ -889,7 +777,7 @@ def process_file(filepath, grad_year, conn, max_rows=None):
 
 def main():
     print("=" * 60)
-    print("SmartTracer ETL v4")
+    print("SmartTracer ETL v5")
     print("=" * 60)
 
     try:
@@ -922,30 +810,27 @@ def main():
     print("""
 Verifikasi di pgAdmin:
 
--- 1. Cek nama & NIM masuk response_answers
-SELECT ra.question_code, ra.answer_text, ap.name, ap.nim
-FROM tracer_oltp.response_answers ra
-JOIN tracer_oltp.responses r ON r.id = ra.response_id
-JOIN tracer_oltp.alumni_profiles ap ON ap.id = r.alumni_id
-WHERE ra.question_code IN ('nimhsmsmh','nmmhsmsmh')
-LIMIT 10;
+-- 1. Cek f502 sudah tidak ada duplikat (semua answer_index = 0)
+SELECT answer_index, COUNT(*) FROM tracer_oltp.response_answers
+WHERE question_code = 'f502' GROUP BY answer_index ORDER BY answer_index;
 
--- 2. Cek f5a1 (province id) dan f5a2 (city id) sudah berupa angka integer
-SELECT ra.question_code, ra.answer_text,
-       p.name AS province_name,
-       c.name AS city_name
-FROM tracer_oltp.response_answers ra
-JOIN tracer_oltp.responses r ON r.id = ra.response_id
-LEFT JOIN tracer_oltp.provinces p ON p.id::text = ra.answer_text AND ra.question_code = 'f5a1'
-LEFT JOIN tracer_oltp.cities    c ON c.id::text = ra.answer_text AND ra.question_code = 'f5a2'
-WHERE ra.question_code IN ('f5a1','f5a2')
-LIMIT 20;
+-- 2. Cek null sudah terisi "0"
+SELECT question_code, COUNT(*) FILTER (WHERE answer_text = '0') AS jumlah_nol,
+       COUNT(*) AS total
+FROM tracer_oltp.response_answers
+GROUP BY question_code ORDER BY question_code;
 
 -- 3. Jumlah jawaban per question_code (kelengkapan data)
 SELECT question_code, COUNT(*) AS jumlah
 FROM tracer_oltp.response_answers
-GROUP BY question_code
-ORDER BY question_code;
+GROUP BY question_code ORDER BY question_code;
+
+-- 4. Pastikan tidak ada duplikat response per alumni
+SELECT response_count, COUNT(*) as jumlah_alumni
+FROM (
+    SELECT alumni_id, COUNT(*) as response_count
+    FROM tracer_oltp.responses GROUP BY alumni_id
+) t GROUP BY response_count ORDER BY response_count;
 """)
 
 
