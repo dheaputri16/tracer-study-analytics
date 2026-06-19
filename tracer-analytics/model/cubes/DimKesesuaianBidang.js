@@ -8,8 +8,8 @@ cube(`DimKesesuaianBidang`, {
       primary_key: true,
     },
     id_kesesuaian_level: {
-      sql: `id_kesesuaian_level`,
-      type: `number`,
+      sql: `id_kesesuaian_bidang`,
+      type: `string`,
     },
     label: {
       sql: `label`,

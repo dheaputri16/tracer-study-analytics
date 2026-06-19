@@ -17,7 +17,7 @@ cube(`DimStudiLanjut`, {
     },
     sumber_biaya: {
       sql: `sumber_biaya`,
-      type: `number`,
+      type: `string`,
     },
   },
 });

@@ -11,7 +11,7 @@ cube(`DimPerusahaan`, {
     // ── Natural Key ───────────────────────────────────────────
     id_perusahaan: {
       sql: `id_perusahaan`,
-      type: `number`,
+      type: `string`,
     },
     company_name: {
       sql: `company_name`,
