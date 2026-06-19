@@ -85,6 +85,7 @@ cube(`FactRangeEvaluasi`, {
         DimIndikatorEvaluasi.kode_field,
         DimIndikatorEvaluasi.label_pertanyaan,
         DimIndikatorEvaluasi.kategori_pertanyaan,
+        DimIndikatorEvaluasi.grup_gap,
         DimProdi.jenjang,
         DimProdi.jurusan,
         DimProdi.nama_prodi,
