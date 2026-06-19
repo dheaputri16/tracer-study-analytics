@@ -83,7 +83,9 @@ cube(`FactTracerStudy`, {
       relationship: `many_to_one`,
       sql: `${FactTracerStudy}.perusahaan_sk = ${DimPerusahaan}.perusahaan_sk`,
     },
-
+    // dim_studi_lanjut tidak punya surrogate key terpisah —
+    // id_studi_lanjut IS the PK sekaligus natural key (Type 1,
+    // etl business key = kombinasi perguruan_tinggi + program_studi, jika berbeda maka akan ada row baru).
     DimStudiLanjut: {
       relationship: `many_to_one`,
       sql: `${FactTracerStudy}.id_studi_lanjut = ${DimStudiLanjut}.id_studi_lanjut`,
@@ -207,25 +209,62 @@ cube(`FactTracerStudy`, {
 
     // ── HARDCODE — keputusan bisnis institusi ──────────────────
 
-    // "Terserap" = bekerja (sk=1) + wirausaha (sk=3).
-    // PENTING: Kalau ada status baru yang juga dianggap terserap
-    // (misal sk=6 "Bekerja + Kuliah"), tambahkan sk-nya di sini
-    // DAN update OptionRegistry.php (statusHasPerusahaan).
+    // ── HARDCODE option_code — stabil lintas rebuild ────────────────
+    // IKU 2 Kemendikbud: Terserap = bekerja + wirausaha + studi lanjut
+    //   option_code "1" = Bekerja (full time / part time)
+    //   option_code "3" = Wiraswasta
+    //   option_code "4" = Melanjutkan Pendidikan
+    //   option_code "6" = Melanjutkan pendidikan sambil bekerja
+    //   option_code "7" = Melanjutkan pendidikan sambil wiraswasta
+    //
+    // Menggunakan subquery ke dim_status_alumni (bukan hardcode SK)
+    // karena status_alumni_sk adalah auto-increment yang bisa berubah
+    // antar-rebuild ETL. option_code sebaliknya stabil — bersumber dari
+    // questionnaire_options di OLTP yang tidak berubah kecuali admin
+    // mengubah definisi pertanyaan secara eksplisit.
+    //
+    // Format business key id_status_alumni = "{questionnaire_id}:f8:{option_code}"
+    // → pakai LIKE '%:f8:1' atau split, tapi lebih bersih extract via SPLIT_PART.
     count_terserap: {
       type: `count`,
       filters: [{
-        sql: `${CUBE}.status_alumni_sk IN (1, 3)`,
+        sql: `${CUBE}.status_alumni_sk IN (
+          SELECT status_alumni_sk
+          FROM dim_status_alumni
+          WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '4', '6', '7')
+        )`,
       }],
-      description: `Alumni terserap: bekerja (sk=1) + wirausaha (sk=3)`,
+      description: `Alumni terserap IKU 2: bekerja (1,6) + wirausaha (3,7) + studi lanjut (4)`,
+    },
+
+    // Kebalikannya — untuk chart breakdown "tidak terserap":
+    count_tidak_terserap: {
+      type: `count`,
+      filters: [{
+        sql: `${CUBE}.status_alumni_sk IN (
+          SELECT status_alumni_sk
+          FROM dim_status_alumni
+          WHERE SPLIT_PART(id_status_alumni, ':', 3) NOT IN ('1', '3', '4', '6', '7')
+            AND SPLIT_PART(id_status_alumni, ':', 3) != '0'
+        )`,
+      }],
+      description: `Alumni tidak terserap: belum kerja (2) + sedang mencari (5)`,
     },
 
     // "Cepat" = masa tunggu > 0 dan ≤ 6 bulan (standar DIKTI).
+    // Status: bekerja (1,6) + wirausaha (3,7) — studi lanjut dikecualikan
+    // karena masa_tunggu_bekerja tidak relevan untuk mereka.
     count_masa_tunggu_cepat: {
       type: `count`,
       filters: [
         { sql: `${CUBE}.masa_tunggu_bekerja > 0` },
         { sql: `${CUBE}.masa_tunggu_bekerja <= 6` },
-        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
+        {
+          sql: `${CUBE}.status_alumni_sk IN (
+            SELECT status_alumni_sk FROM dim_status_alumni
+            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
+          )`,
+        },
       ],
       description: `Alumni dapat kerja atau wirausaha dalam 6 bulan (standar DIKTI)`,
     },
@@ -237,48 +276,86 @@ cube(`FactTracerStudy`, {
       filters: [
         { sql: `${CUBE}.masa_tunggu_bekerja >= 0` },
         { sql: `${CUBE}.masa_tunggu_bekerja < 3` },
-        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
+        {
+          sql: `${CUBE}.status_alumni_sk IN (
+            SELECT status_alumni_sk FROM dim_status_alumni
+            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
+          )`,
+        },
       ],
       description: `Alumni dapat kerja dalam 0-3 bulan`,
     },
+
     count_tunggu_3_6_bulan: {
       type: `count`,
       filters: [
         { sql: `${CUBE}.masa_tunggu_bekerja >= 3` },
         { sql: `${CUBE}.masa_tunggu_bekerja <= 6` },
-        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
+        {
+          sql: `${CUBE}.status_alumni_sk IN (
+            SELECT status_alumni_sk FROM dim_status_alumni
+            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
+          )`,
+        },
       ],
       description: `Alumni dapat kerja dalam 3-6 bulan`,
     },
+
     count_tunggu_lebih_6_bulan: {
       type: `count`,
       filters: [
         { sql: `${CUBE}.masa_tunggu_bekerja > 6` },
-        { sql: `${CUBE}.status_alumni_sk IN (1, 3)` },
+        {
+          sql: `${CUBE}.status_alumni_sk IN (
+            SELECT status_alumni_sk FROM dim_status_alumni
+            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
+          )`,
+        },
       ],
       description: `Alumni dapat kerja lebih dari 6 bulan`,
     },
 
-    // "Sesuai bidang" = sk 1,2,3 (Sangat Erat, Erat, Cukup Erat).
-    // "Tidak sesuai"  = sk 4,5   (Kurang Erat, Tidak Sama Sekali).
-    // PENTING: Kalau ada kategori baru (misal sk=6 "Erat Sekali"),
-    // putuskan masuk "sesuai" atau "tidak sesuai" lalu tambahkan
-    // sk-nya di filter yang tepat.
+    // "Sesuai bidang" = option_code 1,2,3 (Sangat Erat, Erat, Cukup Erat).
+    // "Tidak sesuai"  = option_code 4,5   (Kurang Erat, Tidak Sama Sekali).
+    // Filter status: hanya alumni BEKERJA (option_code "1") yang relevan
+    // untuk kesesuaian bidang — bukan wirausaha, bukan studi lanjut.
+    // Opsi 6 ("sambil bekerja") dimasukkan juga karena mereka tetap bekerja.
     count_sesuai_bidang: {
       type: `count`,
       filters: [
-        { sql: `${CUBE}.kesesuaian_bidang_sk IN (1, 2, 3)` },
-        { sql: `${CUBE}.status_alumni_sk = 1` },
+        {
+          sql: `${CUBE}.kesesuaian_bidang_sk IN (
+            SELECT kesesuaian_bidang_sk FROM dim_kesesuaian_bidang
+            WHERE SPLIT_PART(id_kesesuaian_bidang, ':', 3) IN ('1', '2', '3')
+          )`,
+        },
+        {
+          sql: `${CUBE}.status_alumni_sk IN (
+            SELECT status_alumni_sk FROM dim_status_alumni
+            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '6')
+          )`,
+        },
       ],
-      description: `Alumni bekerja sesuai bidang (sk 1-3: Sangat Erat, Erat, Cukup Erat)`,
+      description: `Alumni bekerja sesuai bidang (Sangat Erat, Erat, Cukup Erat)`,
     },
+
     count_tidak_sesuai_bidang: {
       type: `count`,
       filters: [
-        { sql: `${CUBE}.kesesuaian_bidang_sk IN (4, 5)` },
-        { sql: `${CUBE}.status_alumni_sk = 1` },
+        {
+          sql: `${CUBE}.kesesuaian_bidang_sk IN (
+            SELECT kesesuaian_bidang_sk FROM dim_kesesuaian_bidang
+            WHERE SPLIT_PART(id_kesesuaian_bidang, ':', 3) IN ('4', '5')
+          )`,
+        },
+        {
+          sql: `${CUBE}.status_alumni_sk IN (
+            SELECT status_alumni_sk FROM dim_status_alumni
+            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '6')
+          )`,
+        },
       ],
-      description: `Alumni bekerja tidak sesuai bidang (sk 4-5: Kurang Erat, Tidak Sama Sekali)`,
+      description: `Alumni bekerja tidak sesuai bidang (Kurang Erat, Tidak Sama Sekali)`,
     },
   },
 
