@@ -15,7 +15,7 @@ cube(`DimStatusAlumni`, {
     // ── Natural Key ───────────────────────────────────────────
     id_status_alumni: {
       sql: `id_status_alumni`,
-      type: `number`,
+      type: `string`,
       // 1=Bekerja, 2=Belum memungkinkan, 3=Wiraswasta,
       // 4=Melanjutkan Pendidikan, 5=Tidak kerja tapi mencari
     },

@@ -11,7 +11,7 @@ cube(`DimKesesuaianLevel`, {
     // ── Natural Key ───────────────────────────────────────────
     id_kesesuaian_level: {
       sql: `id_kesesuaian_level`,
-      type: `number`,
+      type: `string`,
     },
     label: {
       sql: `label`,

@@ -11,7 +11,7 @@ cube(`DimWirausaha`, {
     // ── Natural Key ───────────────────────────────────────────
     id_wirausaha: {
       sql: `id_wirausaha`,
-      type: `number`,
+      type: `string`,
     },
     nama_provinsi: {
       sql: `nama_provinsi`,
