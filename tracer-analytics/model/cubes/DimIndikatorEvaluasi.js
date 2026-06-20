@@ -25,5 +25,9 @@ cube(`DimIndikatorEvaluasi`, {
       type: `string`,
       // 'range' atau 'multi_select'
     },
+    grup_gap: {
+      sql: `grup_gap`,
+      type: `string`,
+    },
   },
 });
