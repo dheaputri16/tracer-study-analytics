@@ -468,7 +468,7 @@ cube(`FactTracerStudy`, {
         // Status alumni untuk distribusi
         DimStatusAlumni.label,
         // Filter waktu — keduanya disertakan:
-        DimAlumni.tahun_lulus,      // untuk grafik tren per angkatan
+        DimAlumni.tahun_lulus,      // untuk grafik tren per tahun lulus
         DimWaktu.tahun_snapshot,    // untuk konteks snapshot
         DimWaktu.minggu_snapshot,   // untuk filter global minggu snapshot
       ],

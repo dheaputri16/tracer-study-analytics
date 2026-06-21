@@ -16,15 +16,6 @@ cube(`DimAlumni`, {
       type: `string`,
     },
     // ─────────────────────────────────────────────────────────
-    jenis_kelamin: {
-      sql: `jenis_kelamin`,
-      type: `number`,
-      // 1 = Laki-laki, 2 = Perempuan
-    },
-    angkatan: {
-      sql: `angkatan`,
-      type: `string`,
-    },
     tahun_lulus: {
       sql: `tahun_lulus`,
       type: `string`,
