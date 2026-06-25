@@ -326,7 +326,7 @@ cube(`FactTracerStudy`, {
         {
           sql: `${CUBE}.kesesuaian_bidang_sk IN (
             SELECT kesesuaian_bidang_sk FROM dim_kesesuaian_bidang
-            WHERE SPLIT_PART(id_kesesuaian_bidang, ':', 3) IN ('1', '2', '3')
+            WHERE SPLIT_PART(id_kesesuaian_bidang, ':', 3) IN ('1', '2')
           )`,
         },
         {
