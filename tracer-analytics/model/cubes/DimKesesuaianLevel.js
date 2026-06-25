@@ -3,8 +3,8 @@ cube(`DimKesesuaianLevel`, {
 
   dimensions: {
     // ── Surrogate Key ─────────────────────────────────────────
-    keseuaian_level_sk: {
-      sql: `keseuaian_level_sk`,
+    kesesuaian_level_sk: {
+      sql: `kesesuaian_level_sk`,
       type: `number`,
       primary_key: true,    
     },
