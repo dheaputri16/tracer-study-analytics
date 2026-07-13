@@ -97,6 +97,16 @@ cube(`FactTracerStudy`, {
       relationship: `many_to_one`,
       sql: `${FactTracerStudy}.wirausaha_sk = ${DimWirausaha}.wirausaha_sk`,
     },
+
+    // Dipakai oleh dimension salary_ump_multiplier di bawah -- sebelumnya
+    // TIDAK di-join sama sekali, karena perbandingan gaji vs UMP cukup lewat
+    // flag_above_ump yang sudah dihitung sekali di ETL (ambang 1.2x hardcode).
+    // Join ini ditambah supaya perbandingan bisa dihitung ULANG di query time
+    // dengan ambang berapa pun (lihat catatan di salary_ump_multiplier).
+    DimUmp: {
+      relationship: `many_to_one`,
+      sql: `${FactTracerStudy}.ump_sk = ${DimUmp}.ump_sk`,
+    },
   },
 
   // ─────────────────────────────────────────────────────────────
@@ -108,10 +118,16 @@ cube(`FactTracerStudy`, {
   //     karena data ada di dimensi, bukan hardcode di sini.
   //
   //  2. HARDCODE — logika bisnis institusi.
-  //     Angka dan batas tidak ada di database — keputusan manusia.
-  //     Kalau standar berubah, edit di sini saja.
-  //     Kalau ada status baru masuk "terserap", tambahkan sk-nya
-  //     di count_terserap DAN di OptionRegistry.php.
+  //     Angka dan batas (mis. rentang bulan masa tunggu) tidak ada
+  //     di database — itu keputusan institusi (standar DIKTI), jadi
+  //     tetap literal di sini.
+  //     Klasifikasi option_code → kategori KPI (mis. status mana yang
+  //     terhitung "terserap") TIDAK lagi di-hardcode di file ini.
+  //     Sumbernya sekarang tabel `public.kpi_category_mapping` — kalau
+  //     ada status baru yang perlu masuk ke suatu kategori, cukup
+  //     INSERT/aktifkan row baru lewat admin UI Pemetaan KPI, tidak
+  //     perlu ubah kode cube ini sama sekali. Lihat subquery di tiap
+  //     measure di bawah untuk `digunakan_oleh` yang relevan.
   // ─────────────────────────────────────────────────────────────
 
   measures: {
@@ -209,78 +225,146 @@ cube(`FactTracerStudy`, {
 
     // ── HARDCODE — keputusan bisnis institusi ──────────────────
 
-    // ── HARDCODE option_code — stabil lintas rebuild ────────────────
-    // IKU 2 Kemendikbud: Terserap = bekerja + wirausaha + studi lanjut
-    //   option_code "1" = Bekerja (full time / part time)
-    //   option_code "3" = Wiraswasta
-    //   option_code "4" = Melanjutkan Pendidikan
-    //   option_code "6" = Melanjutkan pendidikan sambil bekerja
-    //   option_code "7" = Melanjutkan pendidikan sambil wiraswasta
+    // ── DINAMIS, POINT-IN-TIME (option_code → kategori dari kpi_category_mapping) ──
+    // IKU 2 Kemendikbud: Terserap = bekerja + wirausaha + studi lanjut.
+    // Klasifikasi option_code mana yang terhitung "terserap" vs "tidak"
+    // TIDAK lagi hardcode di sini — bersumber dari public.kpi_category_mapping
+    // (digunakan_oleh = 'iku2_keterserapan'), yang diisi lewat admin UI
+    // Pemetaan KPI. Tambah status baru ke kategori ini = INSERT row baru
+    // di tabel itu, tidak perlu ubah/redeploy cube.
     //
-    // Menggunakan subquery ke dim_status_alumni (bukan hardcode SK)
-    // karena status_alumni_sk adalah auto-increment yang bisa berubah
-    // antar-rebuild ETL. option_code sebaliknya stabil — bersumber dari
-    // questionnaire_options di OLTP yang tidak berubah kecuali admin
-    // mengubah definisi pertanyaan secara eksplisit.
+    // PENTING — kenapa lookup-nya "point-in-time", bukan sekadar
+    // "WHERE is_active = true":
+    // kpi_category_mapping TIDAK bergrain per id_waktu/snapshot — kalau
+    // subquery cuma mengecek is_active, maka mengubah definisi "terserap"
+    // hari ini akan diam-diam menghitung ULANG seluruh snapshot historis
+    // pakai definisi BARU, bukan definisi yang berlaku saat snapshot itu
+    // diambil. Untuk kebutuhan akreditasi (BAN-PT/LAM butuh "definisi apa
+    // yang dipakai laporan periode X"), itu salah. Sebagai gantinya, tiap
+    // baris fact di-cocokkan ke kpi_category_mapping yang EFEKTIF pada
+    // tanggal snapshot-nya sendiri (dim_waktu.tanggal_refresh milik
+    // ${CUBE}.id_waktu baris itu) — pakai effective_date/deactivated_at
+    // yang sudah ada di skema, tidak perlu kolom baru:
+    //   effective_date <= tanggal_refresh
+    //   AND (deactivated_at IS NULL OR deactivated_at::date > tanggal_refresh)
+    //   ORDER BY effective_date DESC LIMIT 1  -- baris paling baru yang
+    //                                            berlaku pada tanggal itu
+    // Snapshot BARU (dan snapshot mendatang) otomatis ikut definisi
+    // TERBARU karena tanggal_refresh-nya juga baru; snapshot LAMA tetap
+    // terkunci ke definisi yang berlaku saat itu.
     //
-    // Format business key id_status_alumni = "{questionnaire_id}:f8:{option_code}"
-    // → pakai LIKE '%:f8:1' atau split, tapi lebih bersih extract via SPLIT_PART.
+    // Subquery tetap resolve lewat dim_status_alumni.id_status_alumni
+    // (bukan hardcode SK) karena status_alumni_sk adalah auto-increment
+    // yang bisa berubah antar-rebuild ETL. option_code sebaliknya stabil
+    // — bersumber dari questionnaire_options di OLTP yang tidak berubah
+    // kecuali admin mengubah definisi pertanyaan secara eksplisit.
+    //
+    // Format business key id_status_alumni = "{questionnaire_id}:{question_code}:{option_code}"
+    // → extract option_code via SPLIT_PART, lalu match ke kpi_category_mapping.
     count_terserap: {
       type: `count`,
       filters: [{
-        sql: `${CUBE}.status_alumni_sk IN (
-          SELECT status_alumni_sk
-          FROM dim_status_alumni
-          WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '4', '6', '7')
-        )`,
+        sql: `(
+          SELECT kcm.kpi_category
+          FROM kpi_category_mapping kcm
+          JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+          WHERE kcm.semantic_role = 'status_pekerjaan'
+            AND kcm.digunakan_oleh = 'iku2_keterserapan'
+            AND kcm.option_code = SPLIT_PART(
+              (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+              ':', 3
+            )
+            AND kcm.effective_date <= dw.tanggal_refresh
+            AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+          ORDER BY kcm.effective_date DESC
+          LIMIT 1
+        ) = 'terserap'`,
       }],
-      description: `Alumni terserap IKU 2: bekerja (1,6) + wirausaha (3,7) + studi lanjut (4)`,
+      description: `Alumni terserap IKU 2 (bekerja + wirausaha + studi lanjut), pakai definisi kpi_category_mapping yang berlaku pada tanggal snapshot masing-masing baris`,
     },
 
-    // Kebalikannya — untuk chart breakdown "tidak terserap":
+    // Kebalikannya — untuk chart breakdown "tidak terserap". Sama-sama
+    // point-in-time, lihat catatan lengkap di count_terserap.
     count_tidak_terserap: {
       type: `count`,
       filters: [{
-        sql: `${CUBE}.status_alumni_sk IN (
-          SELECT status_alumni_sk
-          FROM dim_status_alumni
-          WHERE SPLIT_PART(id_status_alumni, ':', 3) NOT IN ('1', '3', '4', '6', '7')
-            AND SPLIT_PART(id_status_alumni, ':', 3) != '0'
-        )`,
+        sql: `(
+          SELECT kcm.kpi_category
+          FROM kpi_category_mapping kcm
+          JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+          WHERE kcm.semantic_role = 'status_pekerjaan'
+            AND kcm.digunakan_oleh = 'iku2_keterserapan'
+            AND kcm.option_code = SPLIT_PART(
+              (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+              ':', 3
+            )
+            AND kcm.effective_date <= dw.tanggal_refresh
+            AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+          ORDER BY kcm.effective_date DESC
+          LIMIT 1
+        ) = 'tidak'`,
       }],
-      description: `Alumni tidak terserap: belum kerja (2) + sedang mencari (5)`,
+      description: `Alumni tidak terserap (belum kerja + sedang mencari), pakai definisi kpi_category_mapping yang berlaku pada tanggal snapshot masing-masing baris`,
     },
 
-    // "Cepat" = masa tunggu > 0 dan ≤ 6 bulan (standar DIKTI).
-    // Status: bekerja (1,6) + wirausaha (3,7) — studi lanjut dikecualikan
-    // karena masa_tunggu_bekerja tidak relevan untuk mereka.
+    // "Cepat" = masa tunggu > 0 dan ≤ 6 bulan (standar DIKTI — HARDCODE,
+    // ini batas kebijakan institusi, bukan fakta code→kategori, jadi
+    // angka 0/3/6 bulan tetap literal di sini).
+    // Status yang eligible untuk dihitung masa tunggunya (bekerja +
+    // wirausaha; studi lanjut dikecualikan karena masa_tunggu_bekerja
+    // tidak relevan untuk mereka) DINAMIS + point-in-time dari
+    // kpi_category_mapping (digunakan_oleh = 'masa_tunggu_valid_status').
     count_masa_tunggu_cepat: {
       type: `count`,
       filters: [
         { sql: `${CUBE}.masa_tunggu_bekerja > 0` },
         { sql: `${CUBE}.masa_tunggu_bekerja <= 6` },
         {
-          sql: `${CUBE}.status_alumni_sk IN (
-            SELECT status_alumni_sk FROM dim_status_alumni
-            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'status_pekerjaan'
+              AND kcm.digunakan_oleh = 'masa_tunggu_valid_status'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'valid'`,
         },
       ],
       description: `Alumni dapat kerja atau wirausaha dalam 6 bulan (standar DIKTI)`,
     },
 
-    // Distribusi masa tunggu — rentang ditentukan institusi.
-    // Kalau rentang berubah, edit ketiga measure ini sekaligus.
+    // Distribusi masa tunggu — rentang bulan (HARDCODE, kebijakan
+    // institusi). Kalau rentang berubah, edit ketiga measure ini
+    // sekaligus. Status eligible tetap DINAMIS + point-in-time dari
+    // kpi_category_mapping, sama seperti count_masa_tunggu_cepat di atas.
     count_tunggu_0_3_bulan: {
       type: `count`,
       filters: [
         { sql: `${CUBE}.masa_tunggu_bekerja >= 0` },
         { sql: `${CUBE}.masa_tunggu_bekerja < 3` },
         {
-          sql: `${CUBE}.status_alumni_sk IN (
-            SELECT status_alumni_sk FROM dim_status_alumni
-            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'status_pekerjaan'
+              AND kcm.digunakan_oleh = 'masa_tunggu_valid_status'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'valid'`,
         },
       ],
       description: `Alumni dapat kerja dalam 0-3 bulan`,
@@ -292,10 +376,21 @@ cube(`FactTracerStudy`, {
         { sql: `${CUBE}.masa_tunggu_bekerja >= 3` },
         { sql: `${CUBE}.masa_tunggu_bekerja <= 6` },
         {
-          sql: `${CUBE}.status_alumni_sk IN (
-            SELECT status_alumni_sk FROM dim_status_alumni
-            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'status_pekerjaan'
+              AND kcm.digunakan_oleh = 'masa_tunggu_valid_status'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'valid'`,
         },
       ],
       description: `Alumni dapat kerja dalam 3-6 bulan`,
@@ -306,56 +401,113 @@ cube(`FactTracerStudy`, {
       filters: [
         { sql: `${CUBE}.masa_tunggu_bekerja > 6` },
         {
-          sql: `${CUBE}.status_alumni_sk IN (
-            SELECT status_alumni_sk FROM dim_status_alumni
-            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '3', '6', '7')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'status_pekerjaan'
+              AND kcm.digunakan_oleh = 'masa_tunggu_valid_status'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'valid'`,
         },
       ],
       description: `Alumni dapat kerja lebih dari 6 bulan`,
     },
 
-    // "Sesuai bidang" = option_code 1,2,3 (Sangat Erat, Erat, Cukup Erat).
-    // "Tidak sesuai"  = option_code 4,5   (Kurang Erat, Tidak Sama Sekali).
-    // Filter status: hanya alumni BEKERJA (option_code "1") yang relevan
-    // untuk kesesuaian bidang — bukan wirausaha, bukan studi lanjut.
-    // Opsi 6 ("sambil bekerja") dimasukkan juga karena mereka tetap bekerja.
+    // "Sesuai bidang" / "tidak sesuai" — klasifikasi option_code dari
+    // kpi_category_mapping (digunakan_oleh = 'kesesuaian_bidang_relevance',
+    // semantic_role = 'relevansi_bidang'), point-in-time seperti measure
+    // lain di atas. Filter status kerja yang eligible untuk dihitung
+    // kesesuaian bidangnya (hanya alumni yang benar-benar bekerja — bukan
+    // wirausaha, bukan studi lanjut) juga dari kpi_category_mapping
+    // (digunakan_oleh = 'kesesuaian_bidang_employed_status'), point-in-time.
     count_sesuai_bidang: {
       type: `count`,
       filters: [
         {
-          sql: `${CUBE}.kesesuaian_bidang_sk IN (
-            SELECT kesesuaian_bidang_sk FROM dim_kesesuaian_bidang
-            WHERE SPLIT_PART(id_kesesuaian_bidang, ':', 3) IN ('1', '2')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'relevansi_bidang'
+              AND kcm.digunakan_oleh = 'kesesuaian_bidang_relevance'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dkb.id_kesesuaian_bidang FROM dim_kesesuaian_bidang dkb WHERE dkb.kesesuaian_bidang_sk = ${CUBE}.kesesuaian_bidang_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'sesuai'`,
         },
         {
-          sql: `${CUBE}.status_alumni_sk IN (
-            SELECT status_alumni_sk FROM dim_status_alumni
-            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '6')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'status_pekerjaan'
+              AND kcm.digunakan_oleh = 'kesesuaian_bidang_employed_status'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'valid'`,
         },
       ],
-      description: `Alumni bekerja sesuai bidang (Sangat Erat, Erat, Cukup Erat)`,
+      description: `Alumni bekerja sesuai bidang, pakai definisi kpi_category_mapping yang berlaku pada tanggal snapshot masing-masing baris`,
     },
 
     count_tidak_sesuai_bidang: {
       type: `count`,
       filters: [
         {
-          sql: `${CUBE}.kesesuaian_bidang_sk IN (
-            SELECT kesesuaian_bidang_sk FROM dim_kesesuaian_bidang
-            WHERE SPLIT_PART(id_kesesuaian_bidang, ':', 3) IN ('4', '5')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'relevansi_bidang'
+              AND kcm.digunakan_oleh = 'kesesuaian_bidang_relevance'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dkb.id_kesesuaian_bidang FROM dim_kesesuaian_bidang dkb WHERE dkb.kesesuaian_bidang_sk = ${CUBE}.kesesuaian_bidang_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'tidak_sesuai'`,
         },
         {
-          sql: `${CUBE}.status_alumni_sk IN (
-            SELECT status_alumni_sk FROM dim_status_alumni
-            WHERE SPLIT_PART(id_status_alumni, ':', 3) IN ('1', '6')
-          )`,
+          sql: `(
+            SELECT kcm.kpi_category
+            FROM kpi_category_mapping kcm
+            JOIN dim_waktu dw ON dw.id_waktu = ${CUBE}.id_waktu
+            WHERE kcm.semantic_role = 'status_pekerjaan'
+              AND kcm.digunakan_oleh = 'kesesuaian_bidang_employed_status'
+              AND kcm.option_code = SPLIT_PART(
+                (SELECT dsa.id_status_alumni FROM dim_status_alumni dsa WHERE dsa.status_alumni_sk = ${CUBE}.status_alumni_sk),
+                ':', 3
+              )
+              AND kcm.effective_date <= dw.tanggal_refresh
+              AND (kcm.deactivated_at IS NULL OR kcm.deactivated_at::date > dw.tanggal_refresh)
+            ORDER BY kcm.effective_date DESC
+            LIMIT 1
+          ) = 'valid'`,
         },
       ],
-      description: `Alumni bekerja tidak sesuai bidang (Kurang Erat, Tidak Sama Sekali)`,
+      description: `Alumni bekerja tidak sesuai bidang, pakai definisi kpi_category_mapping yang berlaku pada tanggal snapshot masing-masing baris`,
     },
   },
 
@@ -410,7 +562,37 @@ cube(`FactTracerStudy`, {
     bulan_sesudah_lulus:   { sql: `bulan_sesudah_lulus`,   type: `number` },
     masa_tunggu_wirausaha: { sql: `masa_tunggu_wirausaha`, type: `number` },
     take_home_pay:         { sql: `take_home_pay`,         type: `number` },
+    // flag_above_ump TETAP ADA (jangan dihapus) -- masih dipakai measure
+    // count_above_ump/count_below_ump lama (ambang 1.2x tetap ini, hardcode
+    // di AlumniFactBuilderService saat ETL). Dimension di bawah adalah jalur
+    // BARU, terpisah, untuk ambang dinamis per LAM.
     flag_above_ump:        { sql: `flag_above_ump`,        type: `number` },
+
+    // Rasio gaji terhadap UMP, dihitung ULANG di query time (bukan flag
+    // hasil ETL) -- supaya bisa dibandingkan terhadap ambang APAPUN (mis.
+    // param_value dari threshold_configs per LAM version: 1.2x, 1.4x, dst),
+    // bukan cuma 1.2x yang dibakukan di ETL. Laravel (PendapatanRepository)
+    // memfilter dimension ini dengan operator gte/lt + nilai ambang dinamis,
+    // pola yang sama dengan masa_tunggu_bekerja vs ambang cepat dinamis.
+    // NULL kalau salah satu dari take_home_pay/nilai_ump kosong/nol --
+    // konsisten dengan flag_above_ump yang juga NULL pada kondisi itu.
+    //
+    // Subquery mentah ke dim_ump (BUKAN ${DimUmp}.nilai_ump) -- Cube.js
+    // menolak dimension FactTracerStudy yang mereferensikan cube lain
+    // langsung ("references foreign cubes... split and move this
+    // definition"), sama seperti kenapa lookup point-in-time
+    // kpi_category_mapping di measures atas juga pakai subquery mentah,
+    // bukan template ${OtherCube}. join DimUmp di atas tetap dipertahankan
+    // untuk dokumentasi relasi & dipakai query lain yang butuh dimension
+    // asli DimUmp (mis. DimUmp.tahun), tapi dimension computed lintas-cube
+    // seperti ini harus lewat subquery.
+    salary_ump_multiplier: {
+      sql: `CASE WHEN (SELECT du.nilai_ump FROM dim_ump du WHERE du.ump_sk = ${CUBE}.ump_sk) > 0
+                  AND ${CUBE}.take_home_pay IS NOT NULL
+                  THEN ${CUBE}.take_home_pay::numeric / (SELECT du.nilai_ump FROM dim_ump du WHERE du.ump_sk = ${CUBE}.ump_sk)
+                  ELSE NULL END`,
+      type: `number`,
+    },
   },
 
   // ─────────────────────────────────────────────────────────────
