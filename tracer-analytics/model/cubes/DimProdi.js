@@ -1,5 +1,10 @@
 cube(`DimProdi`, {
-  sql: `SELECT * FROM public.dim_prodi WHERE flag_prodi = true`,
+  // Tidak difilter ke flag_prodi = true — lihat DimWirausaha/DimPerusahaan
+  // untuk alasan lengkap: fact_tracer_study menunjuk ke prodi_sk versi yang
+  // valid pada tanggal snapshot masing-masing baris (SCD Type 2), jadi
+  // memfilter ke versi "current" saja di sini berisiko mematahkan join
+  // untuk fact historis begitu ada perubahan atribut prodi.
+  sql: `SELECT * FROM public.dim_prodi`,
 
   // ─────────────────────────────────────────────────────────────
   //  HIERARKI DIMENSI PRODI

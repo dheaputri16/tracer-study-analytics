@@ -1,5 +1,13 @@
 cube(`DimPerusahaan`, {
-  sql: `SELECT * FROM public.dim_perusahaan WHERE flag_perusahaan = true`,
+  // Tidak difilter ke flag_perusahaan = true di sini: fact_tracer_study
+  // sudah menunjuk ke wirausaha_sk versi yang valid pada tanggal snapshot
+  // masing-masing baris (SCD Type 2). Memfilter ke versi "current" saja
+  // di level cube akan mematahkan join untuk fact historis yang menunjuk
+  // ke versi yang sudah ditutup — persis kasus yang membuat pie/tabel
+  // Sebaran Level Perusahaan tampil kosong meski datanya ada. Filter ke
+  // versi aktif saja tetap bisa dilakukan lewat dimensi flag_perusahaan
+  // bila memang dibutuhkan oleh query tertentu.
+  sql: `SELECT * FROM public.dim_perusahaan`,
 
   dimensions: {
     // ── Surrogate Key ─────────────────────────────────────────
