@@ -151,6 +151,16 @@ cube(`FactTracerStudy`, {
       type: `avg`,
       description: `Rata-rata masa tunggu kerja pertama (bulan)`,
     },
+    // FR-025: median masa tunggu per prodi -- Cube.js tidak punya measure type
+    // 'median'/'percentile' built-in, jadi pakai raw SQL aggregate expression
+    // (type: 'number'). TIDAK dimasukkan ke pre-aggregation distribusi_masa_tunggu
+    // di bawah -- percentile_cont bukan aggregate yang bisa di-rollup/merge
+    // antar partisi, jadi query measure ini selalu live (bukan dari rollup cache).
+    median_masa_tunggu_bekerja: {
+      sql: `percentile_cont(0.5) within group (order by ${CUBE}.masa_tunggu_bekerja)`,
+      type: `number`,
+      description: `Median masa tunggu kerja pertama (bulan)`,
+    },
     min_masa_tunggu_bekerja: {
       sql: `masa_tunggu_bekerja`,
       type: `min`,
