@@ -11,9 +11,14 @@ cube(`DimProdi`, {
   //
   //  Struktur drill-down dari kasar ke detail:
   //
-  //  Jenjang (D3, D4, S1, S2)
-  //    └── Jurusan (Teknik Sipil, Teknik Elektro, dll)
-  //          └── Program Studi (Teknik Konstruksi Gedung, dll)
+  //  Perguruan Tinggi
+  //    └── Jenjang (D3, D4, S1, S2)
+  //          └── Jurusan (Teknik Sipil, Teknik Elektro, dll)
+  //                └── Program Studi (Teknik Konstruksi Gedung, dll)
+  //
+  //  Level Perguruan Tinggi bernilai tunggal pada pemasangan single-tenant,
+  //  sehingga di dashboard ia berfungsi sebagai puncak roll-up: titik "seluruh
+  //  institusi" yang dituju ketika pengguna naik dari jenjang.
   //
   //  Dipakai untuk:
   //  - Drill down di dashboard: user klik "D3" → lihat per jurusan
@@ -34,6 +39,15 @@ cube(`DimProdi`, {
       sql: `id_prodi`,
       type: `number`,
       description: `Business key dari OLTP — untuk ETL lookup`,
+    },
+
+    // ── Hierarki Level 0: Perguruan Tinggi ─────────────────
+    // Puncak hierarki. Dari config/institution.php di backend, diisi ETL
+    // (ProdiDimService). Selaras Gambar 5.3 proposal.
+    nama_pt: {
+      sql: `nama_pt`,
+      type: `string`,
+      description: `Level 0 hierarki: nama perguruan tinggi`,
     },
 
     // ── Hierarki Level 1: Jenjang ──────────────────────────────
@@ -70,6 +84,17 @@ cube(`DimProdi`, {
       sql: `kode_prodi`,
       type: `string`,
       description: `Kode singkat prodi: TKG, TI, AKT, dll`,
+    },
+
+    // ── Atribut akreditasi ─────────────────────────────
+    // Peringkat yang berlaku pada masa versi SCD ini, bukan peringkat hari
+    // ini. Baris versi lama bernilai NULL dengan sengaja — riwayat
+    // akreditasi sebelum kolom ini ada memang tidak pernah tercatat.
+    // Dari OLTP: programs.accreditation
+    akreditasi_prodi: {
+      sql: `akreditasi_prodi`,
+      type: `string`,
+      description: `Peringkat akreditasi prodi pada masa versi ini`,
     },
 
     // ── SCD Type 2 fields ──────────────────────────────────────
