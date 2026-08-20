@@ -97,6 +97,42 @@ cube(`DimProdi`, {
       description: `Peringkat akreditasi prodi pada masa versi ini`,
     },
 
+    // ── Hierarki dinamis (DFR-17/DFR-18, Fase 3) ────────────────
+    // Kolom bertingkat tetap (BUKAN JSONB) hasil resolve pohon org_units
+    // saat ETL jalan -- level_index org_unit_types dipetakan langsung ke
+    // level_N_name (level 1 -> level_1_name, dst). Level yang tidak
+    // dipakai template institusi aktif (mis. level 2-5 pada Politeknik
+    // yang cuma 1 level) bernilai NULL. Untuk mode Politeknik (POLBAN,
+    // default), level_1_name setara nilainya dengan `jurusan` di atas --
+    // dimension lama TIDAK dihapus/diubah supaya 7 pre-aggregation
+    // existing di FactTracerStudy.js tidak perlu disentuh sama sekali di
+    // fase ini. Lihat OrgUnitHierarchyResolverService (backend).
+    level_1_name: {
+      sql: `level_1_name`,
+      type: `string`,
+      description: `Hierarki dinamis level 1 (mis. Jurusan/Fakultas), hasil resolve pohon org_units`,
+    },
+    level_2_name: {
+      sql: `level_2_name`,
+      type: `string`,
+      description: `Hierarki dinamis level 2, NULL jika template institusi tidak punya level ini`,
+    },
+    level_3_name: {
+      sql: `level_3_name`,
+      type: `string`,
+      description: `Hierarki dinamis level 3, NULL jika template institusi tidak punya level ini`,
+    },
+    level_4_name: {
+      sql: `level_4_name`,
+      type: `string`,
+      description: `Hierarki dinamis level 4, NULL jika template institusi tidak punya level ini`,
+    },
+    level_5_name: {
+      sql: `level_5_name`,
+      type: `string`,
+      description: `Hierarki dinamis level 5, NULL jika template institusi tidak punya level ini`,
+    },
+
     // ── SCD Type 2 fields ──────────────────────────────────────
     valid_from: {
       sql: `valid_from`,
