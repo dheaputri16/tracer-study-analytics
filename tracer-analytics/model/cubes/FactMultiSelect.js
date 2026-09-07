@@ -55,6 +55,17 @@ cube(`FactMultiSelect`, {
       type: `number`,
       // id 22–34 = opsi AlasanKerjaTdkSesuai (f1601–f1613)
     },
+    jawaban_lainnya: {
+      sql: `jawaban_lainnya`,
+      type: `string`,
+      // Teks bebas per-alumni untuk anggota grup "Lainnya" (mis. f1613 ->
+      // f1614) -- NULL untuk baris yang bukan opsi "Lainnya", atau yang
+      // companion-nya tidak diisi. Sengaja TIDAK dipakai
+      // dim_indikator_evaluasi.label_pertanyaan sebagai sink karena dim itu
+      // Type1/global (satu label dipakai bareng semua alumni yang pernah
+      // pilih opsi sama) -- lihat migration
+      // 2026_09_05_000001_add_jawaban_lainnya_to_fact_multi_select.
+    },
   },
 
   pre_aggregations: {
