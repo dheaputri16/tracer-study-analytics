@@ -17,6 +17,109 @@
 // dengan benar. Query dari backend menggunakan nama cube asli,
 // contoh: DimProdi.jenjang, DimStatusAlumni.label, dst.
 
+// ─────────────────────────────────────────────────────────────
+//  UKURAN & RENTANG ANGKA OTOMATIS (halaman Insight)
+//
+//  Halaman Insight membiarkan pengguna merakit ukuran sendiri:
+//  "[Rata-rata] dari [Gaji]". Supaya tidak perlu menulis measure satu
+//  per satu, setiap kolom angka di bawah dibangkitkan otomatis untuk
+//  lima fungsi, dan kolom yang masuk akal dikelompokkan juga dibangkitkan
+//  jadi dimensi rentang ("Gaji per Rp 2 jt").
+//
+//  `meta` dibaca backend lewat /cubejs-api/v1/meta untuk menyusun katalog
+//  Insight -- menambah kolom di sini otomatis muncul di halaman Insight,
+//  tanpa menyentuh backend maupun frontend.
+//
+//  `sql` sengaja berbentuk fungsi (CUBE) => ...: transpiler Cube hanya
+//  menulis ulang template ${CUBE} yang ditulis langsung di dalam cube(),
+//  bukan yang dibangkitkan di fungsi pembantu. Cube me-resolve argumen
+//  fungsi berdasarkan NAMA parameternya, jadi parameter wajib bernama CUBE.
+// ─────────────────────────────────────────────────────────────
+
+const FUNGSI_ANGKA = [
+  { fn: `avg`, label: `Rata-rata`, type: `avg` },
+  { fn: `median`, label: `Nilai tengah`, type: null },
+  { fn: `sum`, label: `Total`, type: `sum` },
+  { fn: `min`, label: `Terkecil`, type: `min` },
+  { fn: `max`, label: `Terbesar`, type: `max` },
+];
+
+function ukuranAngka(kolom) {
+  const hasil = {};
+  kolom.forEach((k) => {
+    FUNGSI_ANGKA.forEach((f) => {
+      hasil[`agg_${f.fn}_${k.nama}`] = {
+        sql: f.type
+          ? (CUBE) => k.sql(`${CUBE}`)
+          : (CUBE) => `percentile_cont(0.5) within group (order by ${k.sql(`${CUBE}`)})`,
+        type: f.type || `number`,
+        title: `${f.label} ${k.label.toLowerCase()}`,
+        meta: {
+          kind: `agg`,
+          fn: f.fn,
+          fn_label: f.label,
+          column: k.nama,
+          column_label: k.label,
+          format: k.format,
+        },
+      };
+    });
+  });
+  return hasil;
+}
+
+// Label rentang berupa teks yang bisa diurutkan apa adanya: angka diberi
+// nol di depan ("03–05 bulan", "Rp 04–06 jt"). Bulan ditulis inklusif
+// (0–2 = bulan 0, 1, 2); rupiah ditulis dengan batas atas eksklusif, sesuai
+// kebiasaan membaca rentang gaji. NULL tetap NULL -> "(kosong)" di Insight.
+function rentangAngka(kolom) {
+  const hasil = {};
+  kolom.forEach((k) => {
+    (k.rentang || []).forEach((w) => {
+      const bulan = k.satuan === `bulan`;
+      hasil[`rentang_${k.nama}_${w}`] = {
+        sql: (CUBE) => {
+          const x = k.sql(`${CUBE}`);
+          const awal = `(FLOOR((${x}) / ${w * k.skala}) * ${w})::int`;
+          const akhir = bulan ? `${awal} + ${w - 1}` : `${awal} + ${w}`;
+          const angka = bulan && w === 1
+            ? `LPAD(${awal}::text, 2, '0')`
+            : `LPAD(${awal}::text, 2, '0') || '–' || LPAD((${akhir})::text, 2, '0')`;
+          return `CASE WHEN (${x}) IS NULL THEN NULL ELSE ${bulan ? `` : `'Rp ' || `}${angka} || '${bulan ? ` bulan` : ` jt`}' END`;
+        },
+        type: `string`,
+        title: `${k.label} per ${bulan ? `${w} bulan` : `Rp ${w} jt`}`,
+        meta: {
+          kind: `bin`,
+          column: k.nama,
+          column_label: k.label,
+          width: w,
+          width_label: bulan ? `per ${w} bulan` : `per Rp ${w} jt`,
+        },
+      };
+    });
+  });
+  return hasil;
+}
+
+
+// Kolom angka fact_tracer_study yang bisa diagregasi & dikelompokkan.
+// masa_tunggu_wirausaha tidak disertakan: kolomnya belum pernah terisi.
+const KOLOM_ANGKA_TRACER = [
+  { nama: `take_home_pay`, label: `Gaji`, format: `currency`, satuan: `rupiah`, skala: 1000000, rentang: [1, 2, 5],
+    sql: (c) => `${c}.take_home_pay` },
+  { nama: `nilai_ump`, label: `UMP provinsi tempat kerja`, format: `currency`, satuan: `rupiah`, skala: 1000000, rentang: [1],
+    // Subquery per baris, bukan join: ukuran tetap milik cube ini dan
+    // baris tanpa UMP bernilai NULL (tidak ikut dirata-rata).
+    sql: (c) => `(SELECT u.nilai_ump FROM dim_ump u WHERE u.ump_sk = ${c}.ump_sk)` },
+  { nama: `masa_tunggu_bekerja`, label: `Masa tunggu kerja (bulan)`, format: `decimal`, satuan: `bulan`, skala: 1, rentang: [1, 3, 6],
+    sql: (c) => `${c}.masa_tunggu_bekerja` },
+  { nama: `bulan_sebelum_lulus`, label: `Mulai mencari kerja sebelum lulus (bulan)`, format: `decimal`, satuan: `bulan`, skala: 1,
+    sql: (c) => `${c}.bulan_sebelum_lulus` },
+  { nama: `bulan_sesudah_lulus`, label: `Mencari kerja sesudah lulus (bulan)`, format: `decimal`, satuan: `bulan`, skala: 1, rentang: [1, 3, 6],
+    sql: (c) => `${c}.bulan_sesudah_lulus` },
+];
+
 cube(`FactTracerStudy`, {
   sql_table: `public.fact_tracer_study`,
 
@@ -519,6 +622,9 @@ cube(`FactTracerStudy`, {
       ],
       description: `Alumni bekerja tidak sesuai bidang, pakai definisi kpi_category_mapping yang berlaku pada tanggal snapshot masing-masing baris`,
     },
+
+    // ── Dibangkitkan otomatis untuk Insight (lihat ukuranAngka) ──
+    ...ukuranAngka(KOLOM_ANGKA_TRACER),
   },
 
   // ─────────────────────────────────────────────────────────────
@@ -603,6 +709,9 @@ cube(`FactTracerStudy`, {
                   ELSE NULL END`,
       type: `number`,
     },
+
+    // ── Dibangkitkan otomatis untuk Insight (lihat rentangAngka) ──
+    ...rentangAngka(KOLOM_ANGKA_TRACER),
   },
 
   // ─────────────────────────────────────────────────────────────

@@ -1,3 +1,59 @@
+// ─────────────────────────────────────────────────────────────
+//  UKURAN & RENTANG ANGKA OTOMATIS (halaman Insight)
+//
+//  Halaman Insight membiarkan pengguna merakit ukuran sendiri:
+//  "[Rata-rata] dari [Gaji]". Supaya tidak perlu menulis measure satu
+//  per satu, setiap kolom angka di bawah dibangkitkan otomatis untuk
+//  lima fungsi, dan kolom yang masuk akal dikelompokkan juga dibangkitkan
+//  jadi dimensi rentang ("Gaji per Rp 2 jt").
+//
+//  `meta` dibaca backend lewat /cubejs-api/v1/meta untuk menyusun katalog
+//  Insight -- menambah kolom di sini otomatis muncul di halaman Insight,
+//  tanpa menyentuh backend maupun frontend.
+//
+//  `sql` sengaja berbentuk fungsi (CUBE) => ...: transpiler Cube hanya
+//  menulis ulang template ${CUBE} yang ditulis langsung di dalam cube(),
+//  bukan yang dibangkitkan di fungsi pembantu. Cube me-resolve argumen
+//  fungsi berdasarkan NAMA parameternya, jadi parameter wajib bernama CUBE.
+// ─────────────────────────────────────────────────────────────
+
+const FUNGSI_ANGKA = [
+  { fn: `avg`, label: `Rata-rata`, type: `avg` },
+  { fn: `median`, label: `Nilai tengah`, type: null },
+  { fn: `sum`, label: `Total`, type: `sum` },
+  { fn: `min`, label: `Terkecil`, type: `min` },
+  { fn: `max`, label: `Terbesar`, type: `max` },
+];
+
+function ukuranAngka(kolom) {
+  const hasil = {};
+  kolom.forEach((k) => {
+    FUNGSI_ANGKA.forEach((f) => {
+      hasil[`agg_${f.fn}_${k.nama}`] = {
+        sql: f.type
+          ? (CUBE) => k.sql(`${CUBE}`)
+          : (CUBE) => `percentile_cont(0.5) within group (order by ${k.sql(`${CUBE}`)})`,
+        type: f.type || `number`,
+        title: `${f.label} ${k.label.toLowerCase()}`,
+        meta: {
+          kind: `agg`,
+          fn: f.fn,
+          fn_label: f.label,
+          column: k.nama,
+          column_label: k.label,
+          format: k.format,
+        },
+      };
+    });
+  });
+  return hasil;
+}
+
+
+const KOLOM_ANGKA_EVALUASI = [
+  { nama: `skor`, label: `Skor (1–5)`, format: `decimal`, sql: (c) => `${c}.skor` },
+];
+
 cube(`FactRangeEvaluasi`, {
   sql_table: `public.fact_range_evaluasi`,
 
@@ -42,6 +98,9 @@ cube(`FactRangeEvaluasi`, {
       sql: `skor`,
       type: `sum`,
     },
+
+    // ── Dibangkitkan otomatis untuk Insight (lihat ukuranAngka) ──
+    ...ukuranAngka(KOLOM_ANGKA_EVALUASI),
   },
 
   dimensions: {

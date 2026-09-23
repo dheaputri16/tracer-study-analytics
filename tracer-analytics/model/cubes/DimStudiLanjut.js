@@ -19,5 +19,11 @@ cube(`DimStudiLanjut`, {
       sql: `sumber_biaya`,
       type: `string`,
     },
+    // Baris id 0 = alumni yang tidak studi lanjut ("Tidak Ada Data").
+    // Dimensi ini membuat pembedanya bisa disaring tanpa SQL.
+    status_studi: {
+      sql: `CASE WHEN ${CUBE}.id_studi_lanjut = 0 THEN 'Tidak studi lanjut' ELSE 'Studi lanjut' END`,
+      type: `string`,
+    },
   },
 });
