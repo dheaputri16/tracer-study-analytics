@@ -663,15 +663,26 @@ cube(`FactTracerStudy`, {
         DimAlumni.tahun_lulus,      // untuk grafik tren per tahun lulus
         DimWaktu.tahun_snapshot,    // untuk konteks snapshot
         DimWaktu.minggu_snapshot,   // untuk filter global minggu snapshot
+        // id_waktu (surrogate key unik per etl:run) ditambahkan supaya
+        // filter eksplisit DimWaktu.id_waktu yang dikirim PHP (perbaikan
+        // FR-014 untuk label minggu_snapshot yang bisa kembar) bisa
+        // dicocokkan ke rollup ini alih-alih selalu fallback ke query
+        // mentah (bug #13 — lihat HASIL_TESTING_2026-08-23.md §L).
+        DimWaktu.id_waktu,
       ],
       refresh_key: {
-        // Hanya rebuild kalau ETL sudah jalan (tanggal_refresh berubah).
-        // Dicek sekali sehari — cukup untuk ETL mingguan.
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        // `tanggal_refresh` bergranularitas per-HARI, sementara etl:run bisa
+        // dijalankan berkali-kali dalam satu hari kalender (kondisi yang
+        // sudah diakui rutin terjadi lewat mapping auto-trigger). Ketiganya
+        // berbagi tanggal_refresh identik, jadi refresh_key tidak pernah
+        // berubah dan rollup basi (kosong) tidak pernah di-rebuild. Dipakai
+        // MAX(id_waktu) sebagai gantinya — berubah di SETIAP etl:run, bukan
+        // cuma per hari kalender (bug #13).
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },
- 
+
     // ── 2. Distribusi masa tunggu kerja ─────────────────────
     distribusi_masa_tunggu: {
       measures: [
@@ -690,7 +701,7 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },
@@ -715,7 +726,7 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },
@@ -737,7 +748,7 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },
@@ -761,7 +772,7 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },
@@ -788,7 +799,7 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },
@@ -810,7 +821,7 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },

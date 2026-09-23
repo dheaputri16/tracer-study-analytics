@@ -86,7 +86,7 @@ cube(`FactMultiSelect`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(tanggal_refresh) FROM public.dim_waktu`,
+        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
         every: `1 day`,
       },
     },
