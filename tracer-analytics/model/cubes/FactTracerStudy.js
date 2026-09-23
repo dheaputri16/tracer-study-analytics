@@ -678,8 +678,17 @@ cube(`FactTracerStudy`, {
         // berubah dan rollup basi (kosong) tidak pernah di-rebuild. Dipakai
         // MAX(id_waktu) sebagai gantinya — berubah di SETIAP etl:run, bukan
         // cuma per hari kalender (bug #13).
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        //
+        // MAX(id_waktu) pun ternyata belum cukup: baris fakta bisa bertambah
+        // di bawah id_waktu yang SAMA (run ulang/seed ke snapshot yang ada),
+        // dan rollup tertahan di angka lama — total 5066 padahal tabel
+        // fakta berisi 5375, sementara query yang tidak kena rollup sudah
+        // 5375, jadi rincian tidak lagi berjumlah sama dengan totalnya.
+        // Kuncinya kini dibaca dari tabel fakta itu sendiri: jumlah baris +
+        // id terbesar berubah setiap ada baris masuk atau terhapus. Dicek
+        // tiap 5 menit — query-nya ringan (satu agregat di atas PK).
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_fact), 0) FROM public.fact_tracer_study`,
+        every: `5 minute`,
       },
     },
 
@@ -701,8 +710,8 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_fact), 0) FROM public.fact_tracer_study`,
+        every: `5 minute`,
       },
     },
  
@@ -726,8 +735,8 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_fact), 0) FROM public.fact_tracer_study`,
+        every: `5 minute`,
       },
     },
  
@@ -748,8 +757,8 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_fact), 0) FROM public.fact_tracer_study`,
+        every: `5 minute`,
       },
     },
  
@@ -772,8 +781,8 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_fact), 0) FROM public.fact_tracer_study`,
+        every: `5 minute`,
       },
     },
  
@@ -799,8 +808,8 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_fact), 0) FROM public.fact_tracer_study`,
+        every: `5 minute`,
       },
     },
 
@@ -821,9 +830,9 @@ cube(`FactTracerStudy`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_fact), 0) FROM public.fact_tracer_study`,
+        every: `5 minute`,
       },
     },
   },
-});
+});

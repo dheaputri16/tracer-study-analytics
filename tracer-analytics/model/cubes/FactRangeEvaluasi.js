@@ -93,9 +93,9 @@ cube(`FactRangeEvaluasi`, {
         DimWaktu.minggu_snapshot,
       ],
       refresh_key: {
-        sql: `SELECT MAX(id_waktu) FROM public.dim_waktu`,
-        every: `1 day`,
+        sql: `SELECT COUNT(*) || '-' || COALESCE(MAX(id_range_evaluasi), 0) FROM public.fact_range_evaluasi`,
+        every: `5 minute`,
       },
     },
   },
-});
+});
