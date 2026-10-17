@@ -80,6 +80,22 @@ cube(`DimProdi`, {
       description: `Level 3 hierarki: nama program studi spesifik`,
     },
 
+    // Nama prodi belum tentu unik: di data demo D3 dan D4 Akuntansi
+    // sama-sama "Akuntansi" (jenjangnya di kolom sendiri), sehingga
+    // mengelompokkan per nama_prodi menggabungkan dua prodi berbeda. Data
+    // asli sudah berawalan jenjang ("D-3 Akuntansi") -- awalan hanya
+    // ditambahkan bila belum ada, supaya tidak jadi "D3 D-3 Akuntansi".
+    // Dimensi ini yang dipakai Insight sebagai "Program studi" dan level
+    // anak hierarki Jurusan; nama_prodi tetap untuk dashboard lain.
+    prodi_jenjang: {
+      sql: `CASE WHEN COALESCE(${CUBE}.jenjang, '') = ''
+                   OR replace(split_part(${CUBE}.nama_prodi, ' ', 1), '-', '') = ${CUBE}.jenjang
+                 THEN ${CUBE}.nama_prodi
+                 ELSE ${CUBE}.jenjang || ' ' || ${CUBE}.nama_prodi END`,
+      type: `string`,
+      description: `Program studi beserta jenjangnya: "D3 Akuntansi", "D4 Akuntansi"`,
+    },
+
     kode_prodi: {
       sql: `kode_prodi`,
       type: `string`,
