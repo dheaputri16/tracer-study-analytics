@@ -32,6 +32,13 @@ cube(`DimPerusahaan`, {
       type: `string`,
       description: `Jenis perusahaan: Swasta, BUMN, Pemerintah, dll`,
     },
+    // Isian "Lainnya, tuliskan" (f1102); labelnya sendiri tetap "Lainnya".
+    // Hanya untuk drill-through, bukan untuk dikelompokkan.
+    jenis_perusahaan_lainnya: {
+      sql: `jenis_perusahaan_lainnya`,
+      type: `string`,
+      description: `Jenis instansi yang diketik alumni saat memilih "Lainnya"`,
+    },
     label_tingkat_instansi: {
       sql: `label_tingkat_instansi`,
       type: `string`,
