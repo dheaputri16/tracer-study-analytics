@@ -6,6 +6,10 @@ cube(`DimAlumni`, {
       sql: `id_alumni`,
       type: `number`,
       primary_key: true,
+      // Cube v1 default-nya primary_key -> public:false, sehingga tidak bisa
+      // diminta/di-`order`. ExplorerRepository memakainya sebagai tiebreaker
+      // sort (DimAlumni.nama, lalu id_alumni), jadi perlu dibuka.
+      public: true,
     },
     nama: {
       sql: `nama`,
