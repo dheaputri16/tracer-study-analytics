@@ -303,6 +303,13 @@ cube(`FactTracerStudy`, {
       type: `avg`,
       description: `Rata-rata gaji per bulan`,
     },
+    // Pembagi avg_take_home_pay: gaji di luar rentang sah sudah NULL sejak ETL,
+    // jadi count_alumni (semua baris) lebih besar dari banyak alumni yang dirata-rata.
+    count_gaji: {
+      type: `count`,
+      filters: [{ sql: `${CUBE}.take_home_pay IS NOT NULL` }],
+      description: `Alumni dengan gaji valid (pembagi rata-rata gaji)`,
+    },
     min_take_home_pay: {
       sql: `take_home_pay`,
       type: `min`,
